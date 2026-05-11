@@ -30,8 +30,8 @@ dev = [
   "python-jose[cryptography]>=3.3",
 ]
 
-[tool.setuptools]
-packages = ["app"]
+[tool.setuptools.packages.find]
+include = ["app*"]
 
 [tool.ruff]
 line-length = 100
