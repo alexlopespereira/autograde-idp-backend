@@ -1,0 +1,34 @@
+name: cloud-run-deploy
+
+# Disparo manual por enquanto. Habilitar `push: branches: [main]` quando
+# Workload Identity Federation estiver configurada (ver docs/setup.md §8).
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+
+jobs:
+  deploy:
+    name: gcloud builds submit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # necessário para WIF
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Submit Cloud Build
+        run: |
+          gcloud builds submit --config=cloudbuild.yaml \
+            --substitutions=_REGION=${{ secrets.GCP_REGION }},_GOOGLE_OAUTH_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_CLIENT_ID }},_ROSTER_URL=${{ secrets.ROSTER_URL }},_SHEET_ID=${{ secrets.SHEET_ID }}
