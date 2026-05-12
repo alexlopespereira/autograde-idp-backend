@@ -17,7 +17,7 @@ from app.roster import RosterEntry, fetch_roster
 
 logger = logging.getLogger(__name__)
 
-PUBLIC_PATHS = frozenset({"/healthz"})
+PUBLIC_PATHS = frozenset({"/healthz", "/oauth/exchange", "/oauth/refresh"})
 
 
 @dataclass(frozen=True)
