@@ -167,12 +167,13 @@ Use esta lista no dia em que for ligar a turma. Marque (`[x]`) cada item à medi
 
 - [x] **GCP project** `autograde-314802` criado (passo 1).
 - [x] **OAuth Client (Device Flow)** tipo *TVs and Limited Input devices* configurado em estado **Production** (passo 2).
-- [ ] **GitHub PAT classic** com escopo `public_repo` criado e salvo como secret `GITHUB_PAT` no Cloud Run (passo 3).
+- [ ] **GitHub PAT classic** com escopo `public_repo` criado e salvo como secret `github-pat` no Secret Manager (passo 3).
+- [ ] **OAuth `client_secret`** (do passo 2) salvo como secret `google-oauth-client-secret` no Secret Manager. Consumido pelos endpoints `/oauth/exchange` e `/oauth/refresh` que proxyam o `/token` do Google.
 - [ ] **Roster Sheet pública** criada e `ROSTER_URL` (formato `…/export?format=csv&gid=0`) anotado como env var do Cloud Run (passo 4).
 - [ ] **Submissions Sheet privada** criada e `SHEET_ID` anotado (passo 5).
 - [ ] **Service Account** `autograde-submissions-writer@autograde-314802.iam.gserviceaccount.com` criada e adicionada como **Editor** na Submissions Sheet (passo 6).
 - [ ] **Service Account anexada ao Cloud Run service** via `--service-account=...` (passo 7).
-- [ ] **`gcloud builds submit --config=cloudbuild.yaml`** executado com substitutions completas e `--update-secrets=GITHUB_PAT=...` (passo 7).
+- [ ] **`gcloud builds submit --config=cloudbuild.yaml`** executado com substitutions completas. O `cloudbuild.yaml` já liga `GITHUB_PAT=github-pat:latest` e `GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest` via `--update-secrets`.
   *Prova:* `curl https://autograde-backend-<hash>.a.run.app/healthz` responde `{"status":"ok"}`.
 
 > **Smoke test pós-deploy:** depois do último item, peça a um aluno do roster para rodar `autograde login` + `autograde validar 1.1 --auto-submit` num repo de teste. Se a Submissions Sheet receber a row e `autograde notas` listar a tentativa, o pipeline está saudável ponta-a-ponta. O test E2E local (`tests/e2e/test_smoke.py`) valida o mesmo fluxo sem custo de cloud.
