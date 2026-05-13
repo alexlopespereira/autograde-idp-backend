@@ -4,6 +4,7 @@ substitutions:
   _GOOGLE_OAUTH_CLIENT_ID: ""
   _ROSTER_URL: ""
   _SHEET_ID: ""
+  _EXERCISES_BASE_URL: "https://raw.githubusercontent.com/alexlopespereira/idp_governodigital/main/exercicios"
 
 steps:
   - id: build
@@ -38,7 +39,7 @@ steps:
       - --cpu-boost
       - --min-instances=0
       - --allow-unauthenticated
-      - --set-env-vars=GOOGLE_OAUTH_CLIENT_ID=${_GOOGLE_OAUTH_CLIENT_ID},ROSTER_URL=${_ROSTER_URL},SHEET_ID=${_SHEET_ID}
+      - --set-env-vars=GOOGLE_OAUTH_CLIENT_ID=${_GOOGLE_OAUTH_CLIENT_ID},ROSTER_URL=${_ROSTER_URL},SHEET_ID=${_SHEET_ID},EXERCISES_BASE_URL=${_EXERCISES_BASE_URL}
       - --update-secrets=GITHUB_PAT=github-pat:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,GEMINI_API_KEY=gemini-api-key:latest
 
 images:
