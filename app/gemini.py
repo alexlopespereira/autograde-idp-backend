@@ -23,8 +23,7 @@ log = logging.getLogger(__name__)
 
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_API_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    f"{GEMINI_MODEL}:generateContent"
+    f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 )
 GEMINI_TIMEOUT_SECONDS = 30
 
@@ -38,7 +37,9 @@ class GeminiResult:
     ok: bool
 
 
-def _build_prompt(texto_pergunta: str, criterios_avaliacao: str, resposta_aluno: str, peso: int) -> str:
+def _build_prompt(
+    texto_pergunta: str, criterios_avaliacao: str, resposta_aluno: str, peso: int
+) -> str:
     return (
         "Você está avaliando a resposta de um aluno a uma pergunta de reflexão num "
         "exercício de programação. Atribua uma nota inteira de 0 a "
@@ -68,7 +69,9 @@ def grade_resposta(
     key = api_key if api_key is not None else os.environ.get("GEMINI_API_KEY", "")
     if not key:
         log.error("gemini_unavailable reason=missing_api_key")
-        return GeminiResult(nota=peso, feedback="gemini_unavailable: GEMINI_API_KEY ausente", ok=False)
+        return GeminiResult(
+            nota=peso, feedback="gemini_unavailable: GEMINI_API_KEY ausente", ok=False
+        )
 
     prompt = _build_prompt(texto_pergunta, criterios_avaliacao, resposta_aluno, peso)
     payload = {
@@ -97,7 +100,9 @@ def grade_resposta(
         return GeminiResult(nota=peso, feedback=f"gemini_unavailable: rede ({exc})", ok=False)
 
     if resp.status_code != 200:
-        log.error("gemini_unavailable reason=http status=%d body=%s", resp.status_code, resp.text[:200])
+        log.error(
+            "gemini_unavailable reason=http status=%d body=%s", resp.status_code, resp.text[:200]
+        )
         return GeminiResult(
             nota=peso, feedback=f"gemini_unavailable: HTTP {resp.status_code}", ok=False
         )

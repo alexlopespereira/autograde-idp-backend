@@ -187,9 +187,7 @@ def _validate_and_grade(
             submitted_at=submitted_at,
         )
     except InvalidShellEvidence as exc:
-        log.warning(
-            "shell_evidence_invalid exercicio=%s reason=%s", body.exercicio, exc.reason
-        )
+        log.warning("shell_evidence_invalid exercicio=%s reason=%s", body.exercicio, exc.reason)
         return _json_error(400, "invalid_shell_evidence", exc.reason)
 
     try:
@@ -240,9 +238,7 @@ def _validate_respostas(
     for idx, r in enumerate(respostas):
         text = (r or "").strip()
         if not text:
-            return _json_error(
-                400, "resposta_empty", f"resposta {idx + 1} está vazia"
-            )
+            return _json_error(400, "resposta_empty", f"resposta {idx + 1} está vazia")
         cleaned.append(text)
     return cleaned
 
@@ -312,14 +308,9 @@ def _append_gemini_to_bulletin(
     )
 
 
-def _grade_with_gemini(
-    exercise: Exercise, respostas: list[str]
-) -> list[GeminiResult]:
+def _grade_with_gemini(exercise: Exercise, respostas: list[str]) -> list[GeminiResult]:
     return grade_respostas(
-        [
-            (p.texto, p.criterios_avaliacao, r, p.peso)
-            for p, r in zip(exercise.perguntas, respostas)
-        ]
+        [(p.texto, p.criterios_avaliacao, r, p.peso) for p, r in zip(exercise.perguntas, respostas)]
     )
 
 
@@ -341,14 +332,10 @@ async def submissions(body: SubmissionRequestBody, request: Request) -> Any:
 
     if exercise.perguntas:
         rows = await writer.read_submissions()
-        rate_limit_err = _check_rate_limit(
-            rows, user.email, body.exercicio, submitted_at
-        )
+        rate_limit_err = _check_rate_limit(rows, user.email, body.exercicio, submitted_at)
         if rate_limit_err is not None:
             return rate_limit_err
-        gemini_results = await asyncio.to_thread(
-            _grade_with_gemini, exercise, respostas_clean
-        )
+        gemini_results = await asyncio.to_thread(_grade_with_gemini, exercise, respostas_clean)
         bulletin = _append_gemini_to_bulletin(bulletin, exercise, gemini_results)
     else:
         gemini_results = []

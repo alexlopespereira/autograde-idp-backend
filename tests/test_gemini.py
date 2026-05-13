@@ -134,7 +134,9 @@ def test_grade_resposta_uses_env_var_when_api_key_none(monkeypatch: pytest.Monke
 def test_grade_respostas_returns_one_per_input():
     seen: list[tuple[str, str, str, int]] = []
 
-    def fake_grader(texto: str, criterios: str, resposta: str, peso: int, **_k: Any) -> GeminiResult:
+    def fake_grader(
+        texto: str, criterios: str, resposta: str, peso: int, **_k: Any
+    ) -> GeminiResult:
         seen.append((texto, criterios, resposta, peso))
         return GeminiResult(nota=peso, feedback="ok", ok=True)
 
