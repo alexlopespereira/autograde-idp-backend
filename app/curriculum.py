@@ -15,6 +15,7 @@ REQUIRED_TOP_KEYS = (
     "criterios",
 )
 REQUIRED_CRITERIO_KEYS = ("id", "peso", "check")
+REQUIRED_PERGUNTA_KEYS = ("texto", "criterios_avaliacao", "peso")
 
 
 class CurriculumValidationError(Exception):
@@ -30,6 +31,13 @@ class Criterio:
 
 
 @dataclass(frozen=True)
+class Pergunta:
+    texto: str
+    criterios_avaliacao: str
+    peso: int
+
+
+@dataclass(frozen=True)
 class Exercise:
     id: str
     titulo: str
@@ -37,6 +45,7 @@ class Exercise:
     disponivel_a_partir_de: datetime
     prazo: dict[str, Any]
     criterios: tuple[Criterio, ...]
+    perguntas: tuple[Pergunta, ...] = ()
 
 
 def parse_exercise_yaml(yaml_text: str) -> Exercise:
@@ -94,6 +103,8 @@ def parse_exercise_yaml(yaml_text: str) -> Exercise:
             )
         )
 
+    perguntas = _parse_perguntas(data.get("perguntas"))
+
     return Exercise(
         id=str(data["exercicio"]),
         titulo=str(data["titulo"]),
@@ -101,7 +112,44 @@ def parse_exercise_yaml(yaml_text: str) -> Exercise:
         disponivel_a_partir_de=disponivel,
         prazo=dict(prazo),
         criterios=tuple(criterios),
+        perguntas=perguntas,
     )
+
+
+def _parse_perguntas(raw: Any) -> tuple[Pergunta, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise CurriculumValidationError("perguntas precisa ser lista")
+    out: list[Pergunta] = []
+    for idx, p in enumerate(raw):
+        if not isinstance(p, dict):
+            raise CurriculumValidationError(f"perguntas[{idx}] precisa ser mapping")
+        for key in REQUIRED_PERGUNTA_KEYS:
+            if key not in p:
+                raise CurriculumValidationError(
+                    f"perguntas[{idx}]: campo '{key}' faltante"
+                )
+        texto = str(p["texto"]).strip()
+        criterios_avaliacao = str(p["criterios_avaliacao"]).strip()
+        if not texto:
+            raise CurriculumValidationError(f"perguntas[{idx}]: texto vazio")
+        if not criterios_avaliacao:
+            raise CurriculumValidationError(
+                f"perguntas[{idx}]: criterios_avaliacao vazio"
+            )
+        try:
+            peso = int(p["peso"])
+        except (TypeError, ValueError) as exc:
+            raise CurriculumValidationError(
+                f"perguntas[{idx}]: peso precisa ser inteiro ({exc})"
+            ) from exc
+        if peso <= 0:
+            raise CurriculumValidationError(
+                f"perguntas[{idx}]: peso precisa ser > 0"
+            )
+        out.append(Pergunta(texto=texto, criterios_avaliacao=criterios_avaliacao, peso=peso))
+    return tuple(out)
 
 
 def _parse_datetime(val: Any) -> datetime:

@@ -39,7 +39,7 @@ steps:
       - --min-instances=0
       - --allow-unauthenticated
       - --set-env-vars=GOOGLE_OAUTH_CLIENT_ID=${_GOOGLE_OAUTH_CLIENT_ID},ROSTER_URL=${_ROSTER_URL},SHEET_ID=${_SHEET_ID}
-      - --update-secrets=GITHUB_PAT=github-pat:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest
+      - --update-secrets=GITHUB_PAT=github-pat:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,GEMINI_API_KEY=gemini-api-key:latest
 
 images:
   - gcr.io/$PROJECT_ID/${_SERVICE}:$SHORT_SHA

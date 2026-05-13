@@ -12,7 +12,8 @@ from jose import jwt
 from app import auth as auth_module
 from app import endpoints as endpoints_module
 from app.auth import AuthMiddleware, RosterEntry
-from app.curriculum import Criterio, Exercise
+from app.curriculum import Criterio, Exercise, Pergunta
+from app.gemini import GeminiResult
 from app.primitives import CriterioResult, registry
 from app.sheets_writer import AppendResult
 
@@ -61,15 +62,11 @@ PRIMITIVE_FAIL = "test.endpoints.always_fail"
 def _register_test_primitives():
     def always_pass(args: dict, evidence: dict) -> CriterioResult:
         peso = args.get("_peso", 0)
-        return CriterioResult(
-            passed=True, points_earned=peso, points_max=peso, message="ok"
-        )
+        return CriterioResult(passed=True, points_earned=peso, points_max=peso, message="ok")
 
     def always_fail(args: dict, evidence: dict) -> CriterioResult:
         peso = args.get("_peso", 0)
-        return CriterioResult(
-            passed=False, points_earned=0, points_max=peso, message="nope"
-        )
+        return CriterioResult(passed=False, points_earned=0, points_max=peso, message="nope")
 
     registry[PRIMITIVE_PASS] = always_pass
     registry[PRIMITIVE_FAIL] = always_fail
@@ -331,8 +328,16 @@ async def test_submissions_exercise_not_open_yet(patches) -> None:
 async def test_me_grades_groups_by_exercicio(patches) -> None:
     sheets = FakeSheets(
         submissions_rows=[
-            ["timestamp_utc", "submission_id", "email", "nome", "turma", "exercicio",
-             "nota", "nota_max"],
+            [
+                "timestamp_utc",
+                "submission_id",
+                "email",
+                "nome",
+                "turma",
+                "exercicio",
+                "nota",
+                "nota_max",
+            ],
             ["2026-05-08T10:00:00+00:00", "u1", EMAIL, "x", "y", "1.1", "60", "100"],
             ["2026-05-09T10:00:00+00:00", "u2", EMAIL, "x", "y", "1.1", "80", "100"],
             ["2026-05-09T11:00:00+00:00", "u3", EMAIL, "x", "y", "1.2", "100", "100"],
@@ -449,9 +454,7 @@ async def test_submissions_invalid_shell_evidence_returns_400(patches) -> None:
 
 
 @pytest.mark.asyncio
-async def test_grade_preview_valid_shell_evidence_reaches_grade(
-    patches, monkeypatch
-) -> None:
+async def test_grade_preview_valid_shell_evidence_reaches_grade(patches, monkeypatch) -> None:
     """US-14 AC5: valid shell_evidence is parsed into evidence['shell'] dict
     and passed to grade() alongside github_evidence."""
     exercise = _make_exercise(exercicio_id="1.2")
@@ -486,9 +489,7 @@ async def test_grade_preview_valid_shell_evidence_reaches_grade(
                     "tool": "shell",
                     "cmd_joined": "gh auth status",
                     "exit_code": 0,
-                    "stdout": (
-                        f"github.com\n  ✓ Logged in to github.com as {GITHUB_USERNAME}"
-                    ),
+                    "stdout": (f"github.com\n  ✓ Logged in to github.com as {GITHUB_USERNAME}"),
                     "captured_at": captured_at,
                 },
                 {
@@ -516,3 +517,300 @@ async def test_grade_preview_valid_shell_evidence_reaches_grade(
     assert shell["gh_auth_user"] == GITHUB_USERNAME
     assert shell["gh_repo_view"] == {"name": "projeto", "visibility": "PUBLIC"}
     assert "gh --version" in shell["commands_seen"]
+
+
+# ---------- Perguntas subjetivas + Gemini grading ----------
+
+
+def _exercise_with_perguntas(num: int = 1) -> Exercise:
+    base = _make_exercise()
+    perguntas = tuple(
+        Pergunta(
+            texto=f"Pergunta {i + 1}?",
+            criterios_avaliacao=f"Critério avaliação {i + 1}",
+            peso=10,
+        )
+        for i in range(num)
+    )
+    return Exercise(
+        id=base.id,
+        titulo=base.titulo,
+        turmas=base.turmas,
+        disponivel_a_partir_de=base.disponivel_a_partir_de,
+        prazo=base.prazo,
+        criterios=base.criterios,
+        perguntas=perguntas,
+    )
+
+
+@pytest.mark.asyncio
+async def test_grade_preview_returns_perguntas(patches) -> None:
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=2))
+    response = await _post(
+        _make_app(),
+        "/grade-preview",
+        {"exercicio": "1.1", "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["perguntas"] == [
+        {"texto": "Pergunta 1?", "peso": 10},
+        {"texto": "Pergunta 2?", "peso": 10},
+    ]
+    # criterios_avaliacao NÃO é exposto pro aluno (evita gaming)
+    assert "criterios_avaliacao" not in body["perguntas"][0]
+
+
+@pytest.mark.asyncio
+async def test_grade_preview_no_perguntas_returns_empty_list(patches) -> None:
+    _patch_endpoints(patches)
+    response = await _post(
+        _make_app(),
+        "/grade-preview",
+        {"exercicio": "1.1", "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto"},
+    )
+    assert response.status_code == 200
+    assert response.json()["perguntas"] == []
+
+
+@pytest.mark.asyncio
+async def test_submissions_respostas_missing_when_required(patches, monkeypatch) -> None:
+    sheets = FakeSheets(
+        append_result=AppendResult(
+            written=True, row_count_before=0, row_count_after=1, sheet_row_index=2
+        )
+    )
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=1), sheets=sheets)
+    response = await _post(
+        _make_app(),
+        "/submissions",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "submission_uuid": "uuid-noresp",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "respostas_missing"
+    assert len(sheets.appended_rows) == 0  # não persistiu
+
+
+@pytest.mark.asyncio
+async def test_submissions_respostas_count_mismatch(patches) -> None:
+    sheets = FakeSheets(
+        append_result=AppendResult(
+            written=True, row_count_before=0, row_count_after=1, sheet_row_index=2
+        )
+    )
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=2), sheets=sheets)
+    response = await _post(
+        _make_app(),
+        "/submissions",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "submission_uuid": "uuid-x",
+            "respostas": ["só uma"],
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "respostas_count_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_submissions_resposta_empty_rejected(patches) -> None:
+    sheets = FakeSheets(
+        append_result=AppendResult(
+            written=True, row_count_before=0, row_count_after=1, sheet_row_index=2
+        )
+    )
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=1), sheets=sheets)
+    response = await _post(
+        _make_app(),
+        "/submissions",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "submission_uuid": "uuid-empty",
+            "respostas": ["   "],
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "resposta_empty"
+
+
+@pytest.mark.asyncio
+async def test_submissions_happy_path_with_gemini(patches, monkeypatch) -> None:
+    sheets = FakeSheets(
+        append_result=AppendResult(
+            written=True, row_count_before=0, row_count_after=1, sheet_row_index=2
+        )
+    )
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=1), sheets=sheets)
+
+    # Mock Gemini: retorna nota 7 num peso 10
+    monkeypatch.setattr(
+        endpoints_module,
+        "grade_respostas",
+        lambda items: [GeminiResult(nota=7, feedback="razoável", ok=True) for _ in items],
+    )
+
+    response = await _post(
+        _make_app(),
+        "/submissions",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "submission_uuid": "uuid-gem",
+            "respostas": ["minha reflexão"],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    # 60 (base) + 7 (gemini) = 67; max 100 + 10 = 110
+    assert body["bulletin"]["total"] == 67
+    assert body["bulletin"]["max_total"] == 110
+    # respostas_json persistido
+    appended = sheets.appended_rows[0]
+    import json as _json
+
+    payload = _json.loads(appended.respostas_json)
+    assert payload[0]["resposta"] == "minha reflexão"
+    assert payload[0]["nota"] == 7
+    assert payload[0]["feedback"] == "razoável"
+    assert payload[0]["gemini_ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_submissions_gemini_failure_falls_back_to_max(patches, monkeypatch) -> None:
+    sheets = FakeSheets(
+        append_result=AppendResult(
+            written=True, row_count_before=0, row_count_after=1, sheet_row_index=2
+        )
+    )
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=1), sheets=sheets)
+    monkeypatch.setattr(
+        endpoints_module,
+        "grade_respostas",
+        lambda items: [
+            GeminiResult(nota=10, feedback="gemini_unavailable", ok=False) for _ in items
+        ],
+    )
+    response = await _post(
+        _make_app(),
+        "/submissions",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "submission_uuid": "uuid-fb",
+            "respostas": ["qualquer coisa"],
+        },
+    )
+    assert response.status_code == 200
+    appended = sheets.appended_rows[0]
+    import json as _json
+
+    payload = _json.loads(appended.respostas_json)
+    assert payload[0]["nota"] == 10  # peso máximo no fallback
+    assert payload[0]["gemini_ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_submissions_rate_limit_cooldown(patches, monkeypatch) -> None:
+    # Submission existente 10s atrás (< 30s cooldown)
+    recent = (NOW - timedelta(seconds=10)).isoformat()
+    sheets = FakeSheets(
+        append_result=AppendResult(
+            written=True, row_count_before=1, row_count_after=2, sheet_row_index=2
+        ),
+        submissions_rows=[
+            ["header"] * 18,
+            [recent, "uuid-prev", EMAIL, "Aluno", "TD-2026-01", "1.1", "60", "100"] + [""] * 10,
+        ],
+    )
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=1), sheets=sheets)
+    monkeypatch.setattr(
+        endpoints_module,
+        "grade_respostas",
+        lambda items: [GeminiResult(nota=10, feedback="ok", ok=True) for _ in items],
+    )
+    response = await _post(
+        _make_app(),
+        "/submissions",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "submission_uuid": "uuid-rl",
+            "respostas": ["resposta"],
+        },
+    )
+    assert response.status_code == 429
+    assert response.json()["error"] == "rate_limit_cooldown"
+    assert len(sheets.appended_rows) == 0
+
+
+@pytest.mark.asyncio
+async def test_submissions_rate_limit_daily_cap(patches, monkeypatch) -> None:
+    # 10 submissions nas últimas 24h (no limite)
+    rows = [["header"] * 18]
+    for i in range(10):
+        # cada uma > 30s atrás (passa cooldown) mas < 24h (conta no cap)
+        ts = (NOW - timedelta(hours=i + 1)).isoformat()
+        rows.append([ts, f"uuid-{i}", EMAIL, "Aluno", "TD-2026-01", "1.1", "60", "100"] + [""] * 10)
+    sheets = FakeSheets(
+        append_result=AppendResult(
+            written=True, row_count_before=10, row_count_after=11, sheet_row_index=12
+        ),
+        submissions_rows=rows,
+    )
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=1), sheets=sheets)
+    monkeypatch.setattr(
+        endpoints_module,
+        "grade_respostas",
+        lambda items: [GeminiResult(nota=10, feedback="ok", ok=True) for _ in items],
+    )
+    response = await _post(
+        _make_app(),
+        "/submissions",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "submission_uuid": "uuid-cap",
+            "respostas": ["resposta"],
+        },
+    )
+    assert response.status_code == 429
+    assert response.json()["error"] == "rate_limit_daily_cap"
+
+
+@pytest.mark.asyncio
+async def test_submissions_no_perguntas_skips_rate_limit(patches, monkeypatch) -> None:
+    """Exercício sem perguntas: nem rate-limit, nem Gemini, nem respostas_json."""
+    sheets = FakeSheets(
+        append_result=AppendResult(
+            written=True, row_count_before=0, row_count_after=1, sheet_row_index=2
+        ),
+    )
+    _patch_endpoints(patches, sheets=sheets)  # exercise default = sem perguntas
+
+    gemini_called = {"yes": False}
+
+    def boom(items):
+        gemini_called["yes"] = True
+        return []
+
+    monkeypatch.setattr(endpoints_module, "grade_respostas", boom)
+
+    response = await _post(
+        _make_app(),
+        "/submissions",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "submission_uuid": "uuid-noq",
+        },
+    )
+    assert response.status_code == 200
+    assert gemini_called["yes"] is False
+    appended = sheets.appended_rows[0]
+    assert appended.respostas_json == ""

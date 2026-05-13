@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 
 SHEET_TAB = "submissoes"
 ID_COLUMN_RANGE = f"{SHEET_TAB}!B:B"
-READ_RANGE = f"{SHEET_TAB}!A:Q"
+READ_RANGE = f"{SHEET_TAB}!A:R"
 APPEND_RANGE = SHEET_TAB
 SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
 
@@ -54,6 +54,7 @@ COLUMNS: tuple[str, ...] = (
     "client_platform",
     "spec_sha",
     "ai_evidence_hashes",
+    "respostas_json",
 )
 
 
@@ -76,6 +77,7 @@ class SubmissionRow:
     client_platform: str
     spec_sha: str
     ai_evidence_hashes: str = ""
+    respostas_json: str = ""
 
 
 @dataclass(frozen=True)
