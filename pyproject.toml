@@ -18,6 +18,10 @@ dependencies = [
   "tenacity>=9.0",
   "google-api-python-client>=2.140",
   "google-auth>=2.34",
+  # tzdata: zoneinfo no Windows não acha timezones do SO; obrigatório pra
+  # America/Sao_Paulo no rate-limit (reset à meia-noite local) rodar em CI.
+  # Em Linux (Cloud Run) é redundante mas baixa-overhead (~580KB).
+  "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

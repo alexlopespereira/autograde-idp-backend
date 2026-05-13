@@ -43,15 +43,22 @@ class GradeRequestBody(BaseModel):
     repo_url: str
     ai_evidence: list[Any] | None = None
     shell_evidence: list[Any] | None = None
+    respostas: list[str] | None = None
 
 
 class SubmissionRequestBody(GradeRequestBody):
     submission_uuid: str
-    respostas: list[str] | None = None
 
 
-RATE_LIMIT_DAILY_CAP = 10
+RATE_LIMIT_DAILY_CAP = 3  # tanto pra preview-com-respostas quanto pra submissions
 RATE_LIMIT_COOLDOWN_SECONDS = 30
+# Reset do cap é à meia-noite local (Brasil) — pedagogicamente intuitivo.
+RATE_LIMIT_TIMEZONE = "America/Sao_Paulo"
+
+# Column indices na tab `previews` (sheets_writer.PREVIEWS_COLUMNS).
+PREVIEW_TIMESTAMP_COL_IDX = 0
+PREVIEW_EMAIL_COL_IDX = 1
+PREVIEW_EXERCICIO_COL_IDX = 2
 
 
 def _http_fetcher(url: str) -> str:
@@ -212,6 +219,39 @@ async def grade_preview(body: GradeRequestBody, request: Request) -> Any:
     if isinstance(validated, JSONResponse):
         return validated
     exercise, _yaml_text, bulletin, late, days = validated
+
+    # Se respostas vieram E exercício tem perguntas, valida + grada com Gemini.
+    # Sem respostas: retorna bulletin "cru" + lista de perguntas pra CLI prompt.
+    if exercise.perguntas and body.respostas is not None:
+        respostas_check = _validate_respostas(exercise, body.respostas)
+        if isinstance(respostas_check, JSONResponse):
+            return respostas_check
+        respostas_clean: list[str] = respostas_check
+
+        user = request.state.user
+        submitted_at = _now_utc()
+        writer = get_sheets_writer()
+        preview_rows = await writer.read_previews()
+        rl = _check_rate_limit(
+            preview_rows,
+            user.email,
+            body.exercicio,
+            submitted_at,
+            timestamp_col=PREVIEW_TIMESTAMP_COL_IDX,
+            email_col=PREVIEW_EMAIL_COL_IDX,
+            exercicio_col=PREVIEW_EXERCICIO_COL_IDX,
+            error_prefix="rate_limit_preview",
+        )
+        if rl is not None:
+            return rl
+
+        gemini_results = await asyncio.to_thread(_grade_with_gemini, exercise, respostas_clean)
+        bulletin = _append_gemini_to_bulletin(bulletin, exercise, gemini_results)
+        # Conta esta tentativa pro rate-limit. Side-effect: se Gemini falhar,
+        # aluno ainda perde 1 tentativa (decisão consciente — senão dá pra
+        # spam Gemini com payloads garbage pra invalidar a contagem).
+        await writer.append_preview_attempt(submitted_at.isoformat(), user.email, body.exercicio)
+
     return {
         "bulletin": _bulletin_to_dict(bulletin),
         "late": late,
@@ -243,21 +283,38 @@ def _validate_respostas(
     return cleaned
 
 
+def _today_local(now: datetime) -> date:
+    """Data corrente em America/Sao_Paulo (reset do cap = meia-noite local)."""
+    from zoneinfo import ZoneInfo
+
+    return now.astimezone(ZoneInfo(RATE_LIMIT_TIMEZONE)).date()
+
+
 def _check_rate_limit(
     rows: list[list[str]],
     email: str,
     exercicio: str,
     now: datetime,
+    *,
+    timestamp_col: int = TIMESTAMP_COL_IDX,
+    email_col: int = EMAIL_COL_IDX,
+    exercicio_col: int = EXERCICIO_COL_IDX,
+    error_prefix: str = "rate_limit",
 ) -> JSONResponse | None:
-    """Lê rows da sheet e aplica cap diário + cooldown. None = ok."""
-    count_24h = 0
+    """Cooldown + cap diário com reset à meia-noite local. None = ok.
+
+    Usado tanto pra submissoes (cols 0/2/5) quanto pra previews (cols 0/1/2).
+    Coluna `timestamp_col` deve ser ISO8601 com timezone (UTC preferido).
+    """
+    today = _today_local(now)
+    count_today = 0
     for r in rows[1:]:  # pula header
-        if len(r) <= max(EMAIL_COL_IDX, EXERCICIO_COL_IDX):
+        if len(r) <= max(email_col, exercicio_col, timestamp_col):
             continue
-        if r[EMAIL_COL_IDX] != email or r[EXERCICIO_COL_IDX] != exercicio:
+        if r[email_col] != email or r[exercicio_col] != exercicio:
             continue
         try:
-            row_ts = datetime.fromisoformat(r[TIMESTAMP_COL_IDX])
+            row_ts = datetime.fromisoformat(r[timestamp_col])
         except (ValueError, IndexError):
             continue
         if row_ts.tzinfo is None:
@@ -268,16 +325,16 @@ def _check_rate_limit(
         if delta_s < RATE_LIMIT_COOLDOWN_SECONDS:
             return _json_error(
                 429,
-                "rate_limit_cooldown",
+                f"{error_prefix}_cooldown",
                 f"aguarde {RATE_LIMIT_COOLDOWN_SECONDS}s entre tentativas",
             )
-        if delta_s < 86400:
-            count_24h += 1
-    if count_24h >= RATE_LIMIT_DAILY_CAP:
+        if _today_local(row_ts) == today:
+            count_today += 1
+    if count_today >= RATE_LIMIT_DAILY_CAP:
         return _json_error(
             429,
-            "rate_limit_daily_cap",
-            f"limite de {RATE_LIMIT_DAILY_CAP} tentativas/dia atingido",
+            f"{error_prefix}_daily_cap",
+            f"limite de {RATE_LIMIT_DAILY_CAP} tentativas/dia atingido neste exercício",
         )
     return None
 

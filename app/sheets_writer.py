@@ -36,6 +36,12 @@ READ_RANGE = f"{SHEET_TAB}!A:R"
 APPEND_RANGE = SHEET_TAB
 SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
 
+# Tab de preview attempts (rate-limit do /grade-preview que dispara Gemini).
+# Schema mínimo: cada call de preview com respostas grava 1 linha.
+PREVIEWS_TAB = "previews"
+PREVIEWS_RANGE = f"{PREVIEWS_TAB}!A:C"
+PREVIEWS_COLUMNS = ("timestamp_utc", "email", "exercicio")
+
 COLUMNS: tuple[str, ...] = (
     "timestamp_utc",
     "submission_id",
@@ -118,6 +124,53 @@ class SheetsWriter:
 
     async def read_submissions(self) -> list[list[str]]:
         return await asyncio.to_thread(self._read_submissions_sync)
+
+    async def read_previews(self) -> list[list[str]]:
+        """Lê o tab `previews`. Se o tab não existe, retorna [] (não-bloqueante).
+
+        Setup manual: prof precisa criar o tab uma vez na Submissions Sheet com
+        header `timestamp_utc, email, exercicio` em A1/B1/C1.
+        """
+        return await asyncio.to_thread(self._read_previews_sync)
+
+    def _read_previews_sync(self) -> list[list[str]]:
+        try:
+            resp = (
+                self._service.spreadsheets()
+                .values()
+                .get(spreadsheetId=self.spreadsheet_id, range=PREVIEWS_RANGE)
+                .execute()
+            )
+            return resp.get("values", []) or []
+        except Exception as exc:  # noqa: BLE001 - tab missing = empty, log e segue
+            log.warning("previews_tab_read_failed err=%s", exc)
+            return []
+
+    async def append_preview_attempt(
+        self, timestamp_utc: str, email: str, exercicio: str
+    ) -> None:
+        return await asyncio.to_thread(
+            self._append_preview_sync, timestamp_utc, email, exercicio
+        )
+
+    def _append_preview_sync(
+        self, timestamp_utc: str, email: str, exercicio: str
+    ) -> None:
+        try:
+            self._service.spreadsheets().values().append(
+                spreadsheetId=self.spreadsheet_id,
+                range=PREVIEWS_TAB,
+                valueInputOption="RAW",
+                insertDataOption="INSERT_ROWS",
+                body={"values": [[timestamp_utc, email, exercicio]]},
+            ).execute()
+        except Exception as exc:  # noqa: BLE001 - falha não-bloqueante
+            log.error(
+                "previews_tab_append_failed email=%s exercicio=%s err=%s",
+                email,
+                exercicio,
+                exc,
+            )
 
     def _read_submissions_sync(self) -> list[list[str]]:
         resp = (
