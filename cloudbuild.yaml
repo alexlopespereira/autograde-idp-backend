@@ -37,7 +37,7 @@ steps:
       - --concurrency=200
       - --cpu-boost
       - --min-instances=0
-      - --no-allow-unauthenticated
+      - --allow-unauthenticated
       - --set-env-vars=GOOGLE_OAUTH_CLIENT_ID=${_GOOGLE_OAUTH_CLIENT_ID},ROSTER_URL=${_ROSTER_URL},SHEET_ID=${_SHEET_ID}
       - --update-secrets=GITHUB_PAT=github-pat:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest
 
