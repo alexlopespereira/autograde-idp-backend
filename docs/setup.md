@@ -83,34 +83,49 @@ Schema sugerido:
 
 ---
 
-## 6. ⏳ Criar Service Account com Editor na Submissions Sheet
+## 6. ⏳ Compartilhar Submissions Sheet com a Service Account runtime
 
-A SA é quem escreve na Submissions Sheet sem expor credenciais.
+A SA runtime do Cloud Run é quem escreve na Submissions Sheet — não precisa de
+JSON key, autentica via metadata server. `cloudbuild.yaml` não passa
+`--service-account`, então o Cloud Run usa a **default compute SA**
+`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com` (no projeto
+`autograde-314802` → `1065810445001-compute@developer.gserviceaccount.com`).
 
-1. GCP Console → IAM & Admin → Service Accounts → Create service account.
-2. Nome: `autograde-submissions-writer`.
-3. Não atribuir roles no projeto (a permissão é granular na planilha).
-4. Copiar o email da SA (`autograde-submissions-writer@autograde-314802.iam.gserviceaccount.com`).
-5. Na Submissions Sheet → Share → adicionar a SA como **Editor**.
+1. Na Submissions Sheet → Share → adicionar
+   `1065810445001-compute@developer.gserviceaccount.com` como **Editor**.
+
+> Alternativa mais segura (least-privilege): criar uma SA dedicada
+> (`autograde-submissions-writer@...`) e passar
+> `--service-account=...` no deploy. Adia até ter razão concreta para isolar.
 
 ---
 
-## 7. ⏳ Anexar Service Account ao Cloud Run service
-
-Faz o backend autenticar como a SA sem precisar de JSON key no disco.
-
-```bash
-gcloud run services update autograde-backend \
-  --region=southamerica-east1 \
-  --service-account=autograde-submissions-writer@autograde-314802.iam.gserviceaccount.com
-```
-
-Ao subir Cloud Run a primeira vez, use o cloudbuild.yaml deste repo (já no root):
+## 7. ⏳ Deploy do Cloud Run service
 
 ```bash
 gcloud builds submit --config=cloudbuild.yaml \
   --substitutions=_GOOGLE_OAUTH_CLIENT_ID=...,_ROSTER_URL=...,_SHEET_ID=...
 ```
+
+Notas sobre o cloudbuild:
+
+- `--allow-unauthenticated`: o gateway do Cloud Run não exige IAM token. A
+  autenticação real é feita em-app pela `AuthMiddleware`, que valida o
+  `Authorization: Bearer <google_id_token>` contra o JWKS do Google e cruza
+  com o roster. Endpoints em `PUBLIC_PATHS` (`/healthz`, `/oauth/exchange`,
+  `/oauth/refresh`) passam direto — eles existem para ser hit pela CLI antes
+  de o aluno ter qualquer token.
+- A SA runtime (default compute SA) precisa de
+  `roles/secretmanager.secretAccessor` nos secrets `github-pat` e
+  `google-oauth-client-secret`. Grant per-secret:
+
+  ```bash
+  for s in github-pat google-oauth-client-secret; do
+    gcloud secrets add-iam-policy-binding "$s" --project=autograde-314802 \
+      --member="serviceAccount:1065810445001-compute@developer.gserviceaccount.com" \
+      --role="roles/secretmanager.secretAccessor"
+  done
+  ```
 
 ---
 
@@ -171,8 +186,8 @@ Use esta lista no dia em que for ligar a turma. Marque (`[x]`) cada item à medi
 - [ ] **OAuth `client_secret`** (do passo 2) salvo como secret `google-oauth-client-secret` no Secret Manager. Consumido pelos endpoints `/oauth/exchange` e `/oauth/refresh` que proxyam o `/token` do Google.
 - [ ] **Roster Sheet pública** criada e `ROSTER_URL` (formato `…/export?format=csv&gid=0`) anotado como env var do Cloud Run (passo 4).
 - [ ] **Submissions Sheet privada** criada e `SHEET_ID` anotado (passo 5).
-- [ ] **Service Account** `autograde-submissions-writer@autograde-314802.iam.gserviceaccount.com` criada e adicionada como **Editor** na Submissions Sheet (passo 6).
-- [ ] **Service Account anexada ao Cloud Run service** via `--service-account=...` (passo 7).
+- [ ] **Default compute SA** `1065810445001-compute@developer.gserviceaccount.com` adicionada como **Editor** na Submissions Sheet (passo 6).
+- [ ] **`roles/secretmanager.secretAccessor`** grantado à default compute SA nos dois secrets `github-pat` e `google-oauth-client-secret` (passo 7).
 - [ ] **`gcloud builds submit --config=cloudbuild.yaml`** executado com substitutions completas. O `cloudbuild.yaml` já liga `GITHUB_PAT=github-pat:latest` e `GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest` via `--update-secrets`.
   *Prova:* `curl https://autograde-backend-<hash>.a.run.app/healthz` responde `{"status":"ok"}`.
 
