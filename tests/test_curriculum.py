@@ -4,6 +4,7 @@ import pytest
 
 from app.curriculum import (
     CurriculumValidationError,
+    Pergunta,
     fetch_exercise,
     parse_exercise_yaml,
 )
@@ -101,6 +102,70 @@ criterios:
     args: "string-invalido"
 """
     with pytest.raises(CurriculumValidationError, match="args.*mapping.*str"):
+        parse_exercise_yaml(yaml_text)
+
+
+def test_parse_exercise_without_perguntas_is_backward_compatible():
+    ex = parse_exercise_yaml(HAPPY_YAML)
+    assert ex.perguntas == ()
+
+
+def test_parse_exercise_with_perguntas():
+    yaml_text = HAPPY_YAML + """
+perguntas:
+  - texto: "O que você entendeu dos comandos?"
+    criterios_avaliacao: "Aluno deve citar git init, add, commit, push e explicar cada um."
+    peso: 10
+  - texto: "Por que git é útil?"
+    criterios_avaliacao: "Resposta deve mencionar versionamento e colaboração."
+    peso: 5
+"""
+    ex = parse_exercise_yaml(yaml_text)
+    assert len(ex.perguntas) == 2
+    assert isinstance(ex.perguntas[0], Pergunta)
+    assert ex.perguntas[0].texto == "O que você entendeu dos comandos?"
+    assert "git init" in ex.perguntas[0].criterios_avaliacao
+    assert ex.perguntas[0].peso == 10
+    assert ex.perguntas[1].peso == 5
+
+
+def test_parse_exercise_pergunta_missing_required_field_raises():
+    yaml_text = HAPPY_YAML + """
+perguntas:
+  - texto: "Q1"
+    peso: 5
+"""
+    with pytest.raises(CurriculumValidationError, match="criterios_avaliacao"):
+        parse_exercise_yaml(yaml_text)
+
+
+def test_parse_exercise_pergunta_empty_texto_raises():
+    yaml_text = HAPPY_YAML + """
+perguntas:
+  - texto: "   "
+    criterios_avaliacao: "x"
+    peso: 5
+"""
+    with pytest.raises(CurriculumValidationError, match="texto vazio"):
+        parse_exercise_yaml(yaml_text)
+
+
+def test_parse_exercise_pergunta_peso_zero_raises():
+    yaml_text = HAPPY_YAML + """
+perguntas:
+  - texto: "Q"
+    criterios_avaliacao: "c"
+    peso: 0
+"""
+    with pytest.raises(CurriculumValidationError, match="peso.*> 0"):
+        parse_exercise_yaml(yaml_text)
+
+
+def test_parse_exercise_perguntas_not_list_raises():
+    yaml_text = HAPPY_YAML + """
+perguntas: "uma string em vez de lista"
+"""
+    with pytest.raises(CurriculumValidationError, match="perguntas precisa ser lista"):
         parse_exercise_yaml(yaml_text)
 
 

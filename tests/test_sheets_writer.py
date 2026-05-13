@@ -83,8 +83,10 @@ def _build_mock_service(
 # ---------- dataclass ------------------------------------------------------
 
 
-def test_columns_count_is_17() -> None:
-    assert len(COLUMNS) == 17
+def test_columns_count_is_18() -> None:
+    # 17 originais + respostas_json (perguntas subjetivas com grading Gemini)
+    assert len(COLUMNS) == 18
+    assert COLUMNS[-1] == "respostas_json"
 
 
 def test_row_to_values_preserves_column_order() -> None:
@@ -94,7 +96,8 @@ def test_row_to_values_preserves_column_order() -> None:
     assert values[1] == "uuid-A"  # submission_id
     assert values[2] == "aluno@idp.edu.br"  # email
     assert values[16] == ""  # ai_evidence_hashes default
-    assert len(values) == len(COLUMNS) == 17
+    assert values[17] == ""  # respostas_json default
+    assert len(values) == len(COLUMNS) == 18
 
 
 def test_submission_row_default_ai_evidence_empty() -> None:
