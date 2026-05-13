@@ -370,7 +370,9 @@ async def submissions(body: SubmissionRequestBody, request: Request) -> Any:
         client_version=request.headers.get("x-client-version", ""),
         client_platform=request.headers.get("x-client-platform", ""),
         spec_sha=spec_sha,
-        respostas_json=json.dumps(respostas_payload, ensure_ascii=False),
+        respostas_json=(
+            json.dumps(respostas_payload, ensure_ascii=False) if respostas_payload else ""
+        ),
     )
 
     result: AppendResult = await writer.append_submission(row)
