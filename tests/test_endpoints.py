@@ -99,10 +99,13 @@ class FakeGitHub:
 class FakeSheets:
     append_result: AppendResult | None = None
     submissions_rows: list[list[str]] | None = None
+    previews_rows: list[list[str]] | None = None
     appended_rows: list[Any] = None  # type: ignore[assignment]
+    appended_previews: list[tuple[str, str, str]] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         self.appended_rows = []
+        self.appended_previews = []
 
     async def append_submission(self, row: Any) -> AppendResult:
         self.appended_rows.append(row)
@@ -111,6 +114,12 @@ class FakeSheets:
 
     async def read_submissions(self) -> list[list[str]]:
         return self.submissions_rows or []
+
+    async def read_previews(self) -> list[list[str]]:
+        return self.previews_rows or []
+
+    async def append_preview_attempt(self, timestamp_utc: str, email: str, exercicio: str) -> None:
+        self.appended_previews.append((timestamp_utc, email, exercicio))
 
 
 @pytest.fixture
@@ -814,3 +823,200 @@ async def test_submissions_no_perguntas_skips_rate_limit(patches, monkeypatch) -
     assert gemini_called["yes"] is False
     appended = sheets.appended_rows[0]
     assert appended.respostas_json == ""
+
+
+# ---------- /grade-preview com respostas: Gemini + rate-limit ----------
+
+
+@pytest.mark.asyncio
+async def test_grade_preview_with_respostas_runs_gemini_and_appends_to_bulletin(
+    patches, monkeypatch
+) -> None:
+    sheets = FakeSheets()
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=1), sheets=sheets)
+    monkeypatch.setattr(
+        endpoints_module,
+        "grade_respostas",
+        lambda items: [GeminiResult(nota=8, feedback="boa", ok=True) for _ in items],
+    )
+    response = await _post(
+        _make_app(),
+        "/grade-preview",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "respostas": ["minha resposta"],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    # 60 (base) + 8 (gemini) = 68; max 100 + 10 = 110
+    assert body["bulletin"]["total"] == 68
+    assert body["bulletin"]["max_total"] == 110
+    # tentativa contabilizada
+    assert len(sheets.appended_previews) == 1
+    _, recorded_email, recorded_exercicio = sheets.appended_previews[0]
+    assert recorded_email == EMAIL
+    assert recorded_exercicio == "1.1"
+
+
+@pytest.mark.asyncio
+async def test_grade_preview_without_respostas_does_not_call_gemini(patches, monkeypatch) -> None:
+    sheets = FakeSheets()
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=1), sheets=sheets)
+    gemini_called = {"yes": False}
+
+    def boom(items):
+        gemini_called["yes"] = True
+        return []
+
+    monkeypatch.setattr(endpoints_module, "grade_respostas", boom)
+    response = await _post(
+        _make_app(),
+        "/grade-preview",
+        {"exercicio": "1.1", "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto"},
+    )
+    assert response.status_code == 200
+    assert gemini_called["yes"] is False
+    assert len(sheets.appended_previews) == 0
+
+
+@pytest.mark.asyncio
+async def test_grade_preview_respostas_count_mismatch(patches) -> None:
+    sheets = FakeSheets()
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=2), sheets=sheets)
+    response = await _post(
+        _make_app(),
+        "/grade-preview",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "respostas": ["só uma"],
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "respostas_count_mismatch"
+    assert len(sheets.appended_previews) == 0
+
+
+@pytest.mark.asyncio
+async def test_grade_preview_rate_limit_cooldown(patches, monkeypatch) -> None:
+    recent = (NOW - timedelta(seconds=10)).isoformat()
+    sheets = FakeSheets(previews_rows=[["header"] * 3, [recent, EMAIL, "1.1"]])
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=1), sheets=sheets)
+    monkeypatch.setattr(
+        endpoints_module,
+        "grade_respostas",
+        lambda items: [GeminiResult(nota=10, feedback="ok", ok=True) for _ in items],
+    )
+    response = await _post(
+        _make_app(),
+        "/grade-preview",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "respostas": ["x"],
+        },
+    )
+    assert response.status_code == 429
+    assert response.json()["error"] == "rate_limit_preview_cooldown"
+    # Gemini não foi chamado (rate-limit cortou antes)
+    assert len(sheets.appended_previews) == 0
+
+
+@pytest.mark.asyncio
+async def test_grade_preview_rate_limit_daily_cap(patches, monkeypatch) -> None:
+    # 3 previews mesma data local (BRT), todas > 30s atrás (passa cooldown).
+    # NOW = 2026-05-10 12:00 UTC = 2026-05-10 09:00 BRT.
+    rows = [["header"] * 3]
+    for hours_ago in (1, 2, 3):  # 8h, 7h, 6h BRT — todas em 2026-05-10
+        ts = (NOW - timedelta(hours=hours_ago)).isoformat()
+        rows.append([ts, EMAIL, "1.1"])
+    sheets = FakeSheets(previews_rows=rows)
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=1), sheets=sheets)
+    monkeypatch.setattr(
+        endpoints_module,
+        "grade_respostas",
+        lambda items: [GeminiResult(nota=10, feedback="ok", ok=True) for _ in items],
+    )
+    response = await _post(
+        _make_app(),
+        "/grade-preview",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "respostas": ["x"],
+        },
+    )
+    assert response.status_code == 429
+    assert response.json()["error"] == "rate_limit_preview_daily_cap"
+    assert len(sheets.appended_previews) == 0
+
+
+@pytest.mark.asyncio
+async def test_grade_preview_rate_limit_resets_at_local_midnight(patches, monkeypatch) -> None:
+    """Submissões de DIAS LOCAIS anteriores não contam pro cap."""
+    # 3 previews HONTEM (BRT) — todas em 2026-05-09 BRT.
+    # NOW = 2026-05-10 12:00 UTC = 09:00 BRT. Hontem = 2026-05-09.
+    # 12h atrás UTC = 00:00 UTC = 21:00 BRT do dia anterior (2026-05-09).
+    rows = [["header"] * 3]
+    for hours_ago in (12, 14, 16):
+        ts = (NOW - timedelta(hours=hours_ago)).isoformat()
+        rows.append([ts, EMAIL, "1.1"])
+    sheets = FakeSheets(previews_rows=rows)
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=1), sheets=sheets)
+    monkeypatch.setattr(
+        endpoints_module,
+        "grade_respostas",
+        lambda items: [GeminiResult(nota=10, feedback="ok", ok=True) for _ in items],
+    )
+    response = await _post(
+        _make_app(),
+        "/grade-preview",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "respostas": ["resposta"],
+        },
+    )
+    # cap NÃO foi atingido — rows são do dia anterior local
+    assert response.status_code == 200
+    assert len(sheets.appended_previews) == 1
+
+
+@pytest.mark.asyncio
+async def test_grade_preview_rate_limit_isolated_per_exercise(patches, monkeypatch) -> None:
+    """Cap é por exercício — 3 previews do 1.1 não bloqueiam 1.2."""
+    rows = [["header"] * 3]
+    for hours_ago in (1, 2, 3):
+        ts = (NOW - timedelta(hours=hours_ago)).isoformat()
+        rows.append([ts, EMAIL, "1.1"])  # tudo no 1.1
+    sheets = FakeSheets(previews_rows=rows)
+    # exercise é 1.2 (não 1.1), perguntas presentes
+    ex_12 = _exercise_with_perguntas(num=1)
+    ex_12 = Exercise(
+        id="1.2",
+        titulo=ex_12.titulo,
+        turmas=ex_12.turmas,
+        disponivel_a_partir_de=ex_12.disponivel_a_partir_de,
+        prazo=ex_12.prazo,
+        criterios=ex_12.criterios,
+        perguntas=ex_12.perguntas,
+    )
+    _patch_endpoints(patches, exercise=ex_12, sheets=sheets)
+    monkeypatch.setattr(
+        endpoints_module,
+        "grade_respostas",
+        lambda items: [GeminiResult(nota=5, feedback="ok", ok=True) for _ in items],
+    )
+    response = await _post(
+        _make_app(),
+        "/grade-preview",
+        {
+            "exercicio": "1.2",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "respostas": ["resposta 1.2"],
+        },
+    )
+    assert response.status_code == 200
+    assert len(sheets.appended_previews) == 1
