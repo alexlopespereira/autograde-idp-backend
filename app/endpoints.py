@@ -55,6 +55,16 @@ RATE_LIMIT_COOLDOWN_SECONDS = 30
 # Reset do cap é à meia-noite local (Brasil) — pedagogicamente intuitivo.
 RATE_LIMIT_TIMEZONE = "America/Sao_Paulo"
 
+
+def _bypass_rate_limit_emails() -> frozenset[str]:
+    """Allowlist de emails que pulam rate-limit (env var
+    RATE_LIMIT_BYPASS_EMAILS, vírgula-separada). Uso: prof testando.
+
+    Lido a cada chamada pra permitir hot-update via Cloud Run env sem rebuild.
+    """
+    raw = os.environ.get("RATE_LIMIT_BYPASS_EMAILS", "")
+    return frozenset(e.strip().lower() for e in raw.split(",") if e.strip())
+
 # Column indices na tab `previews` (sheets_writer.PREVIEWS_COLUMNS).
 PREVIEW_TIMESTAMP_COL_IDX = 0
 PREVIEW_EMAIL_COL_IDX = 1
@@ -305,7 +315,10 @@ def _check_rate_limit(
 
     Usado tanto pra submissoes (cols 0/2/5) quanto pra previews (cols 0/1/2).
     Coluna `timestamp_col` deve ser ISO8601 com timezone (UTC preferido).
+    Emails na allowlist `RATE_LIMIT_BYPASS_EMAILS` pulam direto (testing).
     """
+    if email.lower() in _bypass_rate_limit_emails():
+        return None
     today = _today_local(now)
     count_today = 0
     for r in rows[1:]:  # pula header

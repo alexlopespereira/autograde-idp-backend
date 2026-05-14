@@ -985,6 +985,36 @@ async def test_grade_preview_rate_limit_resets_at_local_midnight(patches, monkey
 
 
 @pytest.mark.asyncio
+async def test_grade_preview_rate_limit_bypass_for_allowlist_email(patches, monkeypatch) -> None:
+    """Emails em RATE_LIMIT_BYPASS_EMAILS pulam rate-limit (uso: prof testando)."""
+    monkeypatch.setenv("RATE_LIMIT_BYPASS_EMAILS", f"outroprof@x.com,{EMAIL}")
+    # 3 previews hoje (BRT) — normalmente bloquearia
+    rows = [["header"] * 3]
+    for hours_ago in (1, 2, 3):
+        ts = (NOW - timedelta(hours=hours_ago)).isoformat()
+        rows.append([ts, EMAIL, "1.1"])
+    sheets = FakeSheets(previews_rows=rows)
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=1), sheets=sheets)
+    monkeypatch.setattr(
+        endpoints_module,
+        "grade_respostas",
+        lambda items: [GeminiResult(nota=10, feedback="ok", ok=True) for _ in items],
+    )
+    response = await _post(
+        _make_app(),
+        "/grade-preview",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "respostas": ["x"],
+        },
+    )
+    assert response.status_code == 200
+    # Mesmo bypassando, ainda registra na tab pra audit
+    assert len(sheets.appended_previews) == 1
+
+
+@pytest.mark.asyncio
 async def test_grade_preview_rate_limit_isolated_per_exercise(patches, monkeypatch) -> None:
     """Cap é por exercício — 3 previews do 1.1 não bloqueiam 1.2."""
     rows = [["header"] * 3]
