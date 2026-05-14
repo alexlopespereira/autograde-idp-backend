@@ -5,6 +5,8 @@ substitutions:
   _ROSTER_URL: ""
   _SHEET_ID: ""
   _EXERCISES_BASE_URL: "https://raw.githubusercontent.com/alexlopespereira/idp_governodigital/main/exercicios"
+  # Emails que pulam rate-limit (vírgula-separado). Uso: prof testando.
+  _RATE_LIMIT_BYPASS_EMAILS: ""
 
 steps:
   - id: build
@@ -39,7 +41,7 @@ steps:
       - --cpu-boost
       - --min-instances=0
       - --allow-unauthenticated
-      - --set-env-vars=GOOGLE_OAUTH_CLIENT_ID=${_GOOGLE_OAUTH_CLIENT_ID},ROSTER_URL=${_ROSTER_URL},SHEET_ID=${_SHEET_ID},EXERCISES_BASE_URL=${_EXERCISES_BASE_URL}
+      - --set-env-vars=GOOGLE_OAUTH_CLIENT_ID=${_GOOGLE_OAUTH_CLIENT_ID},ROSTER_URL=${_ROSTER_URL},SHEET_ID=${_SHEET_ID},EXERCISES_BASE_URL=${_EXERCISES_BASE_URL},RATE_LIMIT_BYPASS_EMAILS=${_RATE_LIMIT_BYPASS_EMAILS}
       - --update-secrets=GITHUB_PAT=github-pat:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,GEMINI_API_KEY=gemini-api-key:latest
 
 images:
