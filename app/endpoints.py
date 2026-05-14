@@ -347,13 +347,15 @@ def _append_gemini_to_bulletin(
     extra: list[CriterioResult] = []
     extra_total = 0
     extra_max = 0
-    for idx, (pergunta, gr) in enumerate(zip(exercise.perguntas, gemini_results)):
+    for _idx, (pergunta, gr) in enumerate(zip(exercise.perguntas, gemini_results)):
         extra.append(
             CriterioResult(
                 passed=gr.nota >= pergunta.peso // 2,  # passou se ≥ 50% do peso
                 points_earned=gr.nota,
                 points_max=pergunta.peso,
-                message=f"reflexao_{idx + 1}: {gr.feedback}",
+                # Feedback do Gemini puro (justificativa concreta da nota).
+                # CLI renderiza em linha separada indentada se > 50 chars.
+                message=gr.feedback,
             )
         )
         extra_total += gr.nota

@@ -48,7 +48,9 @@ def _build_prompt(
         f"Critérios de avaliação: {criterios_avaliacao}\n\n"
         f"Resposta do aluno: {resposta_aluno}\n\n"
         "Responda APENAS com um JSON no formato "
-        '{"nota": <int>, "feedback": "<feedback curto em português, max 200 chars>"}.'
+        '{"nota": <int>, "feedback": "<justificativa concreta da nota em português, '
+        "explicando o que o aluno acertou e o que faltou conforme os critérios. "
+        'Direto e construtivo. Max 500 chars>"}.'
     )
 
 
@@ -112,7 +114,7 @@ def grade_resposta(
         text = body["candidates"][0]["content"]["parts"][0]["text"]
         parsed = json.loads(text)
         nota_raw = int(parsed["nota"])
-        feedback = str(parsed.get("feedback", "")).strip()[:300]
+        feedback = str(parsed.get("feedback", "")).strip()[:600]
     except (KeyError, IndexError, ValueError, TypeError) as exc:
         log.error("gemini_unavailable reason=parse err=%s body=%s", exc, resp.text[:200])
         return GeminiResult(nota=peso, feedback=f"gemini_unavailable: parse ({exc})", ok=False)
