@@ -41,16 +41,19 @@ def _build_prompt(
     texto_pergunta: str, criterios_avaliacao: str, resposta_aluno: str, peso: int
 ) -> str:
     return (
-        "Você está avaliando a resposta de um aluno a uma pergunta de reflexão num "
-        "exercício de programação. Atribua uma nota inteira de 0 a "
-        f"{peso} com base APENAS nos critérios de avaliação fornecidos.\n\n"
-        f"Pergunta: {texto_pergunta}\n\n"
+        "Você é avaliador de respostas curtas a perguntas de reflexão num "
+        "exercício de programação. Sua tarefa: ler a resposta dada por um aluno "
+        f"e atribuir nota inteira [0, {peso}] com base APENAS nos critérios.\n\n"
+        f"Pergunta apresentada ao aluno: {texto_pergunta}\n\n"
         f"Critérios de avaliação: {criterios_avaliacao}\n\n"
-        f"Resposta do aluno: {resposta_aluno}\n\n"
-        "Responda APENAS com um JSON no formato "
-        '{"nota": <int>, "feedback": "<justificativa concreta da nota em português, '
-        "explicando o que o aluno acertou e o que faltou conforme os critérios. "
-        'Direto e construtivo. Max 500 chars>"}.'
+        f"Resposta dada: {resposta_aluno}\n\n"
+        "REGRA OBRIGATÓRIA do campo `feedback`: deve ser endereçado DIRETAMENTE "
+        "ao aluno em segunda pessoa do singular (use 'você', 'sua resposta', "
+        "'seu raciocínio'). É PROIBIDO escrever 'o aluno' ou 'ele' — fale com "
+        "o aluno, não sobre o aluno. Tom construtivo e direto. Justifique a "
+        "nota: mencione o que foi bem feito e o que faltou para a nota máxima.\n\n"
+        "Responda APENAS com JSON no formato "
+        '{"nota": <int>, "feedback": "<português, max 500 chars>"}.'
     )
 
 
