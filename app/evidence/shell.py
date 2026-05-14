@@ -31,15 +31,18 @@ _GH_AUTH_USER_RE = re.compile(
 )
 
 # Per-exercise whitelist. cmd_joined must match exactly one of the patterns.
-_WHITELIST: dict[str, tuple[re.Pattern[str], ...]] = {
-    "1.2": (
-        re.compile(r"^gh --version$"),
-        re.compile(r"^gh auth status(?:\s+(?:-h|--hostname github\.com))?$"),
-        re.compile(
-            r"^gh repo view [A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+"
-            r"(?:\s+--json\s+[A-Za-z]+(?:,[A-Za-z]+)*)?$"
-        ),
+_GH_BASIC_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^gh --version$"),
+    re.compile(r"^gh auth status(?:\s+(?:-h|--hostname github\.com))?$"),
+    re.compile(
+        r"^gh repo view [A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+"
+        r"(?:\s+--json\s+[A-Za-z]+(?:,[A-Za-z]+)*)?$"
     ),
+)
+_WHITELIST: dict[str, tuple[re.Pattern[str], ...]] = {
+    "1.2": _GH_BASIC_PATTERNS,
+    "1.3": _GH_BASIC_PATTERNS,
+    "1.4": _GH_BASIC_PATTERNS,
 }
 
 
