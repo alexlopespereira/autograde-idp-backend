@@ -30,4 +30,9 @@ def register(name: str) -> Callable[[PrimitiveFunc], PrimitiveFunc]:
     return decorator
 
 
-from . import evidence_shell, github  # noqa: E402, F401  -- trigger primitive registrations
+from . import (  # noqa: E402, F401  -- trigger primitive registrations
+    evidence_artifacts,
+    evidence_shell,
+    github,
+    judge_llm,
+)
