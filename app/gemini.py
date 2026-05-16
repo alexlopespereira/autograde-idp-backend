@@ -291,7 +291,12 @@ def grade_artifact(
         evidence_quote = str(parsed.get("evidence_quote", "")).strip()[:300]
         missing = str(parsed.get("missing", "")).strip()[:400]
     except (KeyError, IndexError, ValueError, TypeError) as exc:
-        log.error("judge_unavailable reason=parse role=%s err=%s body=%s", role, exc, resp.text[:200])
+        log.error(
+            "judge_unavailable reason=parse role=%s err=%s body=%s",
+            role,
+            exc,
+            resp.text[:200],
+        )
         return JudgeResult(1.0, "", f"judge_unavailable: parse ({exc})", ok=False)
 
     if score_raw < 0.0:

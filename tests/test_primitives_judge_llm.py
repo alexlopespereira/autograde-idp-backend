@@ -69,7 +69,10 @@ def _stub_judge(monkeypatch, result: JudgeResult, capture: dict[str, Any] | None
 
 
 def test_meta_prompt_quality_passes_with_high_score(monkeypatch: pytest.MonkeyPatch):
-    _stub_judge(monkeypatch, JudgeResult(score=1.0, evidence_quote="atende tudo", missing="", ok=True))
+    _stub_judge(
+        monkeypatch,
+        JudgeResult(score=1.0, evidence_quote="atende tudo", missing="", ok=True),
+    )
     r = registry["judge.artifacts.meta_prompt_quality"](
         {"_peso": 20, "role": "meta_prompt", "sub_criterios": ["A1", "A2"]},
         _ev(_entry("meta_prompt", content="meu meta-prompt completo")),
@@ -177,7 +180,12 @@ def test_divergence_real_passes(monkeypatch: pytest.MonkeyPatch):
 def test_divergence_real_fails_when_cosmetic(monkeypatch: pytest.MonkeyPatch):
     _stub_judge(
         monkeypatch,
-        JudgeResult(score=0.0, evidence_quote="só resumo", missing="nenhuma divergência real", ok=True),
+        JudgeResult(
+            score=0.0,
+            evidence_quote="só resumo",
+            missing="nenhuma divergência real",
+            ok=True,
+        ),
     )
     r = registry["judge.artifacts.divergence_real"](
         {"_peso": 6, "role": "synthesis"},
@@ -301,7 +309,12 @@ def test_grill_rounds_passes(monkeypatch: pytest.MonkeyPatch):
 def test_relations_explicit_partial_score(monkeypatch: pytest.MonkeyPatch):
     _stub_judge(
         monkeypatch,
-        JudgeResult(score=0.5, evidence_quote="RACI parcial", missing="metade dos atores sem A/C/I", ok=True),
+        JudgeResult(
+            score=0.5,
+            evidence_quote="RACI parcial",
+            missing="metade dos atores sem A/C/I",
+            ok=True,
+        ),
     )
     r = registry["judge.artifacts.relations_explicit"](
         {"_peso": 8, "role": "actor_map"},

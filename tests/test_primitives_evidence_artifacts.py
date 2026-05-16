@@ -231,7 +231,9 @@ def test_heading_pattern_case_insensitive():
 
 
 def test_cross_reference_passes_when_all_terms_in_b():
-    actor_map_content = "| Cidadão | Humano | ... |\n| IVR | IA | ... |\n| Atendente | Humano | ... |"
+    actor_map_content = (
+        "| Cidadão | Humano | ... |\n| IVR | IA | ... |\n| Atendente | Humano | ... |"
+    )
     transcript_content = (
         "Pergunta 1: Você considera o Cidadão como ator inicial?\n"
         "Resposta: Sim, e também o IVR vem logo depois.\n"
