@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from dataclasses import asdict
 from datetime import date, datetime, timezone
 from typing import Any
@@ -19,13 +20,14 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from starlette.responses import JSONResponse
 
+from app import roster as roster_module
 from app.curriculum import CurriculumValidationError, Exercise, parse_exercise_yaml
 from app.evidence.shell import InvalidShellEvidence, validate_shell_evidence
 from app.gemini import GeminiResult, grade_respostas
 from app.github_client import GitHubAPIError, GitHubClient, parse_repo_url
 from app.grader import Bulletin, grade
 from app.primitives import CriterioResult
-from app.sheets_writer import AppendResult, SheetsWriter, SubmissionRow
+from app.sheets_writer import AppendResult, RosterWriter, SheetsWriter, SubmissionRow
 
 log = logging.getLogger(__name__)
 
@@ -115,6 +117,25 @@ def get_sheets_writer() -> SheetsWriter:
     if not sheet_id:
         raise RuntimeError("SHEET_ID not set")
     return SheetsWriter(sheet_id)
+
+
+def get_roster_writer() -> RosterWriter:
+    sheet_id = os.environ.get("ROSTER_SHEET_ID")
+    if not sheet_id:
+        raise RuntimeError("ROSTER_SHEET_ID not set")
+    tab = os.environ.get("ROSTER_SHEET_TAB", "roster")
+    return RosterWriter(sheet_id, tab_name=tab)
+
+
+def _turmas_disponiveis() -> list[str]:
+    raw = os.environ.get("TURMAS_DISPONIVEIS", "")
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+# Caracteres válidos em github username (regra do GitHub: alfanumérico + hífen,
+# sem hífen no início/fim, max 39 chars). Aqui validamos o necessário pra evitar
+# injection na Sheet sem replicar a validação completa do GitHub.
+GITHUB_USERNAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 
 
 def _now_utc() -> datetime:
@@ -508,3 +529,102 @@ async def me_identity(request: Request) -> Any:
         "nome": user.roster.nome,
         "turma": user.turma,
     }
+
+
+class RegisterRequestBody(BaseModel):
+    github_username: str
+    turma: str
+    nome: str | None = None
+
+
+@router.get("/turmas")
+async def list_turmas() -> Any:
+    """Lista turmas disponíveis pra auto-registro (env TURMAS_DISPONIVEIS).
+
+    Endpoint Google-only: aluno autenticado mas ainda fora do roster pode
+    consumir pra escolher a turma antes de chamar /me/register.
+    """
+    return {"turmas": _turmas_disponiveis()}
+
+
+@router.post("/me/register")
+async def me_register(body: RegisterRequestBody, request: Request) -> Any:
+    """Auto-registro de aluno na Roster Sheet (fluxo emergencial).
+
+    Aluno autenticado via Google (não precisa estar no roster) informa
+    github_username + turma. Backend valida e faz append na Roster Sheet.
+    Após o append, cache do roster é limpo pra próxima request ver a entrada.
+    """
+    google_user = request.state.google_user
+    email = google_user.email
+    nome = (body.nome or google_user.name or email.split("@")[0]).strip()
+
+    turmas_validas = _turmas_disponiveis()
+    if not turmas_validas:
+        return _json_error(
+            503,
+            "registration_disabled",
+            "TURMAS_DISPONIVEIS não configurada — registro desabilitado",
+        )
+
+    turma = body.turma.strip()
+    if turma not in turmas_validas:
+        return _json_error(
+            400,
+            "invalid_turma",
+            f"turma deve ser uma de: {', '.join(turmas_validas)}",
+        )
+
+    github_username = body.github_username.strip()
+    if not GITHUB_USERNAME_RE.match(github_username):
+        return _json_error(
+            400,
+            "invalid_github_username",
+            "github_username inválido (alfanumérico + hífen, 1-39 chars)",
+        )
+
+    if not nome:
+        return _json_error(400, "invalid_nome", "nome vazio")
+
+    # Já está no roster? 409 (idempotência fraca: não detecta race conditions
+    # cross-instance, mas Cloud Run roda com max-instances=1 → ok).
+    try:
+        existing_roster = await asyncio.to_thread(
+            roster_module.fetch_roster, _roster_url(), _http_fetcher
+        )
+    except Exception as exc:  # noqa: BLE001 - roster indisponível, log e segue (degrada graceful)
+        log.warning("roster_precheck_failed err=%s", exc)
+        existing_roster = {}
+
+    if email in existing_roster:
+        return _json_error(409, "already_registered", "email já está no roster")
+
+    try:
+        writer = get_roster_writer()
+    except RuntimeError as exc:
+        log.error("roster_writer_unavailable err=%s", exc)
+        return _json_error(503, "registration_disabled", str(exc))
+
+    try:
+        await writer.append_member(email, nome, turma, github_username)
+    except Exception as exc:  # noqa: BLE001 - sheets API falhou
+        log.error("roster_append_failed email=%s err=%s", email, exc)
+        return _json_error(502, "roster_write_unavailable")
+
+    # Invalida cache do roster pra próxima request resolver o user.
+    roster_module._clear_cache()
+
+    log.info("me_register_ok email=%s turma=%s github=%s", email, turma, github_username)
+    return {
+        "email": email,
+        "nome": nome,
+        "turma": turma,
+        "github_username": github_username,
+    }
+
+
+def _roster_url() -> str:
+    url = os.environ.get("ROSTER_URL")
+    if not url:
+        raise RuntimeError("ROSTER_URL not set")
+    return url

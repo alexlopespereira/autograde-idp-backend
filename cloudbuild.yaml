@@ -7,6 +7,11 @@ substitutions:
   _EXERCISES_BASE_URL: "https://raw.githubusercontent.com/alexlopespereira/idp_governodigital/main/exercicios"
   # Emails que pulam rate-limit (vírgula-separado). Uso: prof testando.
   _RATE_LIMIT_BYPASS_EMAILS: ""
+  # Auto-registro de alunos (fluxo emergencial). Se vazias, /me/register
+  # devolve 503 registration_disabled — endpoint vira no-op.
+  _ROSTER_SHEET_ID: ""
+  _ROSTER_SHEET_TAB: "roster"
+  _TURMAS_DISPONIVEIS: ""
 
 steps:
   - id: build
@@ -41,7 +46,7 @@ steps:
       - --cpu-boost
       - --min-instances=0
       - --allow-unauthenticated
-      - --set-env-vars=GOOGLE_OAUTH_CLIENT_ID=${_GOOGLE_OAUTH_CLIENT_ID},ROSTER_URL=${_ROSTER_URL},SHEET_ID=${_SHEET_ID},EXERCISES_BASE_URL=${_EXERCISES_BASE_URL},RATE_LIMIT_BYPASS_EMAILS=${_RATE_LIMIT_BYPASS_EMAILS}
+      - --set-env-vars=GOOGLE_OAUTH_CLIENT_ID=${_GOOGLE_OAUTH_CLIENT_ID},ROSTER_URL=${_ROSTER_URL},SHEET_ID=${_SHEET_ID},EXERCISES_BASE_URL=${_EXERCISES_BASE_URL},RATE_LIMIT_BYPASS_EMAILS=${_RATE_LIMIT_BYPASS_EMAILS},ROSTER_SHEET_ID=${_ROSTER_SHEET_ID},ROSTER_SHEET_TAB=${_ROSTER_SHEET_TAB},TURMAS_DISPONIVEIS=${_TURMAS_DISPONIVEIS}
       - --update-secrets=GITHUB_PAT=github-pat:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,GEMINI_API_KEY=gemini-api-key:latest
 
 images:

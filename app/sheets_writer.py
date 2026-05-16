@@ -42,6 +42,11 @@ PREVIEWS_TAB = "previews"
 PREVIEWS_RANGE = f"{PREVIEWS_TAB}!A:C"
 PREVIEWS_COLUMNS = ("timestamp_utc", "email", "exercicio")
 
+# Roster tab (auto-registro via /me/register). Schema bate com
+# REQUIRED_COLUMNS de app/roster.py.
+ROSTER_TAB_DEFAULT = "roster"
+ROSTER_COLUMNS = ("email", "nome", "turma", "github_username")
+
 COLUMNS: tuple[str, ...] = (
     "timestamp_utc",
     "submission_id",
@@ -260,4 +265,49 @@ class SheetsWriter:
             row_count_before=row_count_before,
             row_count_after=row_count_after,
             sheet_row_index=sheet_row_index,
+        )
+
+
+class RosterWriter:
+    """Append-only writer pra Roster Sheet (auto-registro de alunos).
+
+    Sheet ID separado do submissions sheet (env ROSTER_SHEET_ID), porque o
+    roster geralmente mora numa planilha distinta — a CSV-export URL pública
+    em ROSTER_URL é leitura; aqui precisamos da Sheets API pra escrever.
+    """
+
+    def __init__(
+        self,
+        spreadsheet_id: str,
+        *,
+        tab_name: str = ROSTER_TAB_DEFAULT,
+        service: Resource | None = None,
+    ):
+        self.spreadsheet_id = spreadsheet_id
+        self.tab_name = tab_name
+        self._service = service if service is not None else _build_service()
+
+    async def append_member(
+        self, email: str, nome: str, turma: str, github_username: str
+    ) -> None:
+        async with _append_lock:
+            return await asyncio.to_thread(
+                self._append_sync, email, nome, turma, github_username
+            )
+
+    def _append_sync(
+        self, email: str, nome: str, turma: str, github_username: str
+    ) -> None:
+        self._service.spreadsheets().values().append(
+            spreadsheetId=self.spreadsheet_id,
+            range=self.tab_name,
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": [[email, nome, turma, github_username]]},
+        ).execute()
+        log.info(
+            "roster_writer.append_ok email=%s turma=%s github=%s",
+            email,
+            turma,
+            github_username,
         )
