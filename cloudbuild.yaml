@@ -46,7 +46,10 @@ steps:
       - --cpu-boost
       - --min-instances=0
       - --allow-unauthenticated
-      - --set-env-vars=GOOGLE_OAUTH_CLIENT_ID=${_GOOGLE_OAUTH_CLIENT_ID},ROSTER_URL=${_ROSTER_URL},SHEET_ID=${_SHEET_ID},EXERCISES_BASE_URL=${_EXERCISES_BASE_URL},RATE_LIMIT_BYPASS_EMAILS=${_RATE_LIMIT_BYPASS_EMAILS},ROSTER_SHEET_ID=${_ROSTER_SHEET_ID},ROSTER_SHEET_TAB=${_ROSTER_SHEET_TAB},TURMAS_DISPONIVEIS=${_TURMAS_DISPONIVEIS}
+      # ^@^ prefix muda o separador de vírgula pra @, porque TURMAS_DISPONIVEIS
+      # e RATE_LIMIT_BYPASS_EMAILS são listas vírgula-separadas — sem isso, a
+      # vírgula interna seria parseada como início de novo key=value.
+      - --set-env-vars=^@^GOOGLE_OAUTH_CLIENT_ID=${_GOOGLE_OAUTH_CLIENT_ID}@ROSTER_URL=${_ROSTER_URL}@SHEET_ID=${_SHEET_ID}@EXERCISES_BASE_URL=${_EXERCISES_BASE_URL}@RATE_LIMIT_BYPASS_EMAILS=${_RATE_LIMIT_BYPASS_EMAILS}@ROSTER_SHEET_ID=${_ROSTER_SHEET_ID}@ROSTER_SHEET_TAB=${_ROSTER_SHEET_TAB}@TURMAS_DISPONIVEIS=${_TURMAS_DISPONIVEIS}
       - --update-secrets=GITHUB_PAT=github-pat:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,GEMINI_API_KEY=gemini-api-key:latest
 
 images:
