@@ -43,6 +43,7 @@ class GradeRequestBody(BaseModel):
     repo_url: str
     ai_evidence: list[Any] | None = None
     shell_evidence: list[Any] | None = None
+    artifacts_evidence: list[Any] | None = None
     respostas: list[str] | None = None
 
 
@@ -217,6 +218,7 @@ def _validate_and_grade(
         **github_evidence,
         "ai_evidence": body.ai_evidence or [],
         "shell": shell_context.to_evidence_dict(),
+        "artifacts": body.artifacts_evidence or [],
     }
     bulletin = grade(exercise, evidence)
     late, days = _compute_late(exercise, submitted_at)
