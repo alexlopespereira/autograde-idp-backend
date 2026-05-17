@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from typing import Any, Callable, TypeVar
 
 REQUIRED_COLUMNS = ("email", "nome", "turma", "github_username")
+# Subset que precisa estar PREENCHIDO em cada linha. 'nome' e 'github_username'
+# podem chegar vazios no paste manual e ser completados depois via /me/profile.
+REQUIRED_NONEMPTY_COLUMNS = ("email", "turma")
 ROSTER_TTL_SECONDS = 300
 
 T = TypeVar("T")
@@ -38,7 +41,7 @@ def parse_roster(csv_text: str) -> dict[str, RosterEntry]:
 
     result: dict[str, RosterEntry] = {}
     for idx, row in enumerate(reader, start=2):  # header is line 1
-        for col in REQUIRED_COLUMNS:
+        for col in REQUIRED_NONEMPTY_COLUMNS:
             value = (row.get(col) or "").strip()
             if not value:
                 raise RosterValidationError(f"row {idx}: campo '{col}' vazio")
@@ -47,9 +50,9 @@ def parse_roster(csv_text: str) -> dict[str, RosterEntry]:
             raise RosterValidationError(f"row {idx}: email duplicado '{email}'")
         result[email] = RosterEntry(
             email=email,
-            nome=row["nome"].strip(),
+            nome=(row.get("nome") or "").strip(),
             turma=row["turma"].strip(),
-            github_username=row["github_username"].strip(),
+            github_username=(row.get("github_username") or "").strip(),
         )
 
     if not result:

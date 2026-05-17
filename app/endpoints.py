@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from dataclasses import asdict
 from datetime import date, datetime, timezone
 from typing import Any
@@ -19,12 +20,14 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from starlette.responses import JSONResponse
 
+from app import roster as roster_module
 from app.curriculum import CurriculumValidationError, Exercise, parse_exercise_yaml
 from app.evidence.shell import InvalidShellEvidence, validate_shell_evidence
 from app.gemini import GeminiResult, grade_respostas
 from app.github_client import GitHubAPIError, GitHubClient, parse_repo_url
 from app.grader import Bulletin, grade
 from app.primitives import CriterioResult
+from app.roster_writer import RosterWriter
 from app.sheets_writer import AppendResult, SheetsWriter, SubmissionRow
 
 log = logging.getLogger(__name__)
@@ -115,6 +118,23 @@ def get_sheets_writer() -> SheetsWriter:
     if not sheet_id:
         raise RuntimeError("SHEET_ID not set")
     return SheetsWriter(sheet_id)
+
+
+def get_roster_writer() -> RosterWriter:
+    sheet_id = os.environ.get("ROSTER_SHEET_ID")
+    if not sheet_id:
+        raise RuntimeError("ROSTER_SHEET_ID not set")
+    return RosterWriter(sheet_id)
+
+
+# Regex GitHub username: começa com alnum, até 39 chars, hífen só entre alnums.
+# Lookahead (?=[a-zA-Z0-9]) impede trailing hyphen e hífens consecutivos ('foo--bar').
+GITHUB_USERNAME_RE = re.compile(r"^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$")
+
+
+class ProfileUpdateRequestBody(BaseModel):
+    nome: str
+    github_username: str
 
 
 def _now_utc() -> datetime:
@@ -507,4 +527,23 @@ async def me_identity(request: Request) -> Any:
         "email": user.email,
         "nome": user.roster.nome,
         "turma": user.turma,
+        "github_username": user.roster.github_username,
     }
+
+
+@router.post("/me/profile")
+async def me_profile(body: ProfileUpdateRequestBody, request: Request) -> Any:
+    if not GITHUB_USERNAME_RE.match(body.github_username):
+        return _json_error(400, "invalid_github_username")
+    try:
+        writer = get_roster_writer()
+    except RuntimeError:
+        return _json_error(500, "missing_roster_sheet_config")
+    user = request.state.user
+    result = await asyncio.to_thread(
+        writer.update_profile, user.email, body.nome, body.github_username
+    )
+    # Cache invalidation: senão próximo /me/identity ainda vê o roster antigo
+    # por até ROSTER_TTL_SECONDS (5min).
+    roster_module._clear_cache()
+    return {"updated": list(result.updated), "skipped": list(result.skipped)}

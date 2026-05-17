@@ -376,7 +376,7 @@ async def test_me_grades_empty(patches) -> None:
 
 
 @pytest.mark.asyncio
-async def test_me_identity_returns_email_nome_turma(patches) -> None:
+async def test_me_identity_returns_email_nome_turma_github(patches) -> None:
     _patch_endpoints(patches)
     response = await _get(_make_app(), "/me/identity")
     assert response.status_code == 200
@@ -384,6 +384,37 @@ async def test_me_identity_returns_email_nome_turma(patches) -> None:
         "email": EMAIL,
         "nome": "Aluno Fulano",
         "turma": "TD-2026-01",
+        "github_username": GITHUB_USERNAME,
+    }
+
+
+@pytest.mark.asyncio
+async def test_me_identity_returns_empty_github_username_when_not_set(monkeypatch) -> None:
+    """Roster entry com github_username vazio é exposto literalmente (CLI usa pra
+    decidir se prompta o aluno por /me/profile)."""
+    empty_roster = {
+        EMAIL: RosterEntry(
+            email=EMAIL,
+            nome="Aluno Fulano",
+            turma="TD-2026-01",
+            github_username="",
+        ),
+    }
+
+    def fake_verify(token: str, request_obj, audience: str):
+        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"], audience=audience)
+
+    monkeypatch.setattr(auth_module.id_token, "verify_oauth2_token", fake_verify)
+    monkeypatch.setattr(auth_module, "get_roster", lambda: empty_roster)
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", JWT_AUDIENCE)
+
+    response = await _get(_make_app(), "/me/identity")
+    assert response.status_code == 200
+    assert response.json() == {
+        "email": EMAIL,
+        "nome": "Aluno Fulano",
+        "turma": "TD-2026-01",
+        "github_username": "",
     }
 
 
@@ -1050,3 +1081,142 @@ async def test_grade_preview_rate_limit_isolated_per_exercise(patches, monkeypat
     )
     assert response.status_code == 200
     assert len(sheets.appended_previews) == 1
+
+
+# ---------- POST /me/profile (US-03) ----------
+
+
+@dataclass
+class FakeRosterWriter:
+    result: Any = None
+    calls: list[tuple[str, str, str]] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        self.calls = []
+
+    def update_profile(self, email: str, nome: str, github_username: str) -> Any:
+        self.calls.append((email, nome, github_username))
+        return self.result
+
+
+def _patch_roster_writer(monkeypatch, fake: FakeRosterWriter) -> None:
+    monkeypatch.setattr(endpoints_module, "get_roster_writer", lambda: fake)
+    monkeypatch.setenv("ROSTER_SHEET_ID", "roster-sheet-xyz")
+
+
+@pytest.mark.asyncio
+async def test_me_profile_updates_both_fields(patches) -> None:
+    from app.roster_writer import ProfileUpdateResult
+
+    fake = FakeRosterWriter(
+        result=ProfileUpdateResult(updated=["nome", "github_username"], skipped=[])
+    )
+    _patch_roster_writer(patches, fake)
+    response = await _post(
+        _make_app(),
+        "/me/profile",
+        {"nome": "Foo Bar", "github_username": "foo-bar"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"updated": ["nome", "github_username"], "skipped": []}
+    assert fake.calls == [(EMAIL, "Foo Bar", "foo-bar")]
+
+
+@pytest.mark.asyncio
+async def test_me_profile_both_already_set(patches) -> None:
+    from app.roster_writer import ProfileUpdateResult
+
+    fake = FakeRosterWriter(
+        result=ProfileUpdateResult(updated=[], skipped=["nome", "github_username"])
+    )
+    _patch_roster_writer(patches, fake)
+    response = await _post(
+        _make_app(),
+        "/me/profile",
+        {"nome": "Foo Bar", "github_username": "foo-bar"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"updated": [], "skipped": ["nome", "github_username"]}
+
+
+@pytest.mark.asyncio
+async def test_me_profile_only_one_field_updated(patches) -> None:
+    from app.roster_writer import ProfileUpdateResult
+
+    fake = FakeRosterWriter(
+        result=ProfileUpdateResult(updated=["github_username"], skipped=["nome"])
+    )
+    _patch_roster_writer(patches, fake)
+    response = await _post(
+        _make_app(),
+        "/me/profile",
+        {"nome": "Foo Bar", "github_username": "foo-bar"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"updated": ["github_username"], "skipped": ["nome"]}
+
+
+@pytest.mark.parametrize(
+    "bad_username",
+    [
+        "foo bar",  # contém espaço
+        "",  # vazio
+        "a" * 40,  # > 39 chars
+        "-foo",  # começa com hífen
+        "foo-",  # termina com hífen
+        "foo--bar",  # hífens consecutivos
+        "a--b",  # hífens consecutivos curto
+    ],
+)
+@pytest.mark.asyncio
+async def test_me_profile_invalid_github_username_returns_400(
+    patches, bad_username
+) -> None:
+    from app.roster_writer import ProfileUpdateResult
+
+    fake = FakeRosterWriter(result=ProfileUpdateResult(updated=[], skipped=[]))
+    _patch_roster_writer(patches, fake)
+    response = await _post(
+        _make_app(),
+        "/me/profile",
+        {"nome": "Foo", "github_username": bad_username},
+    )
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid_github_username"}
+    # Validação acontece ANTES do RosterWriter — não deve nem chamar.
+    assert fake.calls == []
+
+
+@pytest.mark.asyncio
+async def test_me_profile_clears_roster_cache(patches) -> None:
+    from app import roster as roster_module_under_test
+    from app.roster_writer import ProfileUpdateResult
+
+    fake = FakeRosterWriter(
+        result=ProfileUpdateResult(updated=["nome", "github_username"], skipped=[])
+    )
+    _patch_roster_writer(patches, fake)
+
+    # Popular cache pra verificar que é limpo depois.
+    roster_module_under_test._CACHE["http://roster.example/x.csv"] = (123.0, {"a": "b"})
+    assert roster_module_under_test._CACHE != {}
+
+    response = await _post(
+        _make_app(),
+        "/me/profile",
+        {"nome": "Foo Bar", "github_username": "foo-bar"},
+    )
+    assert response.status_code == 200
+    assert roster_module_under_test._CACHE == {}
+
+
+@pytest.mark.asyncio
+async def test_me_profile_missing_roster_sheet_config_returns_500(patches) -> None:
+    patches.delenv("ROSTER_SHEET_ID", raising=False)
+    response = await _post(
+        _make_app(),
+        "/me/profile",
+        {"nome": "Foo Bar", "github_username": "foo-bar"},
+    )
+    assert response.status_code == 500
+    assert response.json() == {"error": "missing_roster_sheet_config"}

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autograde-backend"
-version = "0.1.0"
+version = "0.3.0"
 description = "Backend FastAPI do autograder IDP-TD (juiz independente, stateless)."
 requires-python = ">=3.11"
 authors = [{ name = "Alex Lopes Pereira", email = "alexlopespereira@gmail.com" }]

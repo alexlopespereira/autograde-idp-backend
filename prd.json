@@ -1,0 +1,61 @@
+{
+  "projectName": "Cadastro alunos TD-2026-01 + completar perfil no login",
+  "branchName": "feat/cadastro-alunos-2026",
+  "sourcePlan": ".claude/plans/cadastro-alunos-2026.md",
+  "hasFinancialCost": false,
+  "userStories": [
+    {
+      "id": "US-01",
+      "title": "Relaxar parse_roster: aceitar nome e github_username vazios",
+      "description": "Hoje app/roster.py REQUIRED_COLUMNS exige todas as 4 colunas (email, nome, turma, github_username) preenchidas — qualquer linha com célula vazia derruba o roster inteiro com RosterValidationError. Esta story relaxa: 'email' e 'turma' continuam obrigatórios (sem eles a auth não funciona); 'nome' e 'github_username' aceitam string vazia. Atualizar testes (test_roster.py) cobrindo: roster com github_username vazio carrega; roster com nome vazio carrega; roster com email vazio ainda falha; roster com turma vazia ainda falha; RosterEntry permite campos vazios. Bump backend pyproject.toml 0.1.0 -> 0.2.0. Esta fatia é pré-requisito da Fatia 0 (paste manual de 24 linhas com nome/github_username vazios) — deve deployar ANTES do paste, senão parse_roster derruba todo o roster e ninguém consegue logar.",
+      "acceptanceCriteria": [
+        "AC1: Validar [SUPOSIÇÃO 1] do plano: grep -rn 'github_username\\|RosterEntry.nome' em app/ confirma que parse_roster é o único validador de não-vazio pra nome/github_username. Se outro validador aparecer, documentar em progress.txt e ajustar story.",
+        "AC2: app/roster.py REQUIRED_COLUMNS continua incluindo as 4 colunas no header check (header schema imutável), mas a checagem 'campo vazio' em parse_roster só dispara pra 'email' e 'turma'. nome e github_username vazios produzem RosterEntry com strings vazias, sem raise.",
+        "AC3: tests/test_roster.py inclui (no mínimo) 4 testes novos passando: (a) test_parse_roster_aceita_github_username_vazio, (b) test_parse_roster_aceita_nome_vazio, (c) test_parse_roster_rejeita_email_vazio, (d) test_parse_roster_rejeita_turma_vazia. Rodar 'pytest tests/test_roster.py -v' e ver os 4 passando + nenhum dos testes existentes quebrado.",
+        "AC4: pyproject.toml versão bumpa 0.1.0 -> 0.2.0. Justificativa: mudança no contrato do roster (relax constraint).",
+        "AC5: Nenhuma mudança em app/auth.py, app/endpoints.py ou outros módulos nesta story. Diff escopo apenas em app/roster.py + tests/test_roster.py + pyproject.toml.",
+        "AC6: Rodar 'ruff check app/roster.py tests/test_roster.py' e 'pytest -q' inteiros sem regressão. Capturar exit code 0 em ambos."
+      ],
+      "priority": 1,
+      "passes": true
+    },
+    {
+      "id": "US-02",
+      "title": "RosterWriter: classe pra escrever nome/github_username na Roster Sheet via Sheets API",
+      "description": "Criar app/roster_writer.py com classe RosterWriter (espelhando o pattern do app/sheets_writer.py). Métodos: (a) get_row_index(email) -> int|None: lê coluna A da Roster Sheet, retorna 1-based row index do email ou None se não achar; (b) update_profile(email, nome, github_username) -> ProfileUpdateResult: encontra row, lê B<row> e D<row>, e PARA CADA CAMPO faz update SOMENTE SE a célula está vazia (guarda anti-hijacking — decisão #1 do plano). Retorna ProfileUpdateResult(updated: list[str], skipped: list[str]) — 'updated' = campos efetivamente escritos, 'skipped' = campos cuja célula já estava preenchida. Idempotente: chamar 2x não reescreve. Auth via google.auth.default() com SCOPES=('https://www.googleapis.com/auth/spreadsheets',) — mesmo padrão do SheetsWriter. Construtor: RosterWriter(spreadsheet_id, service=None). Tests com mock do service (Resource). Não toca endpoints.py nem auth.py — story isolada.",
+      "acceptanceCriteria": [
+        "AC1: app/roster_writer.py existe e exporta RosterWriter, ProfileUpdateResult (dataclass frozen com fields updated: list[str], skipped: list[str]).",
+        "AC2: RosterWriter.get_row_index('email@x.com') retorna 1-based row index encontrado em A:A; retorna None se email não está na Sheet. Header (row 1) é skipado.",
+        "AC3: RosterWriter.update_profile(email, nome='Foo', github_username='bar') chama _service.spreadsheets().values().get pra ler B<row> e D<row>. Se B<row> vazia, dispara update em B<row> com 'Foo'. Se D<row> vazia, dispara update em D<row> com 'bar'. valueInputOption='RAW' (decisão de segurança — github_username 'foo=BAR()' não vira fórmula).",
+        "AC4: Anti-hijacking validado por teste: chamar update_profile 2x com mesmo email mas github_username diferente. Primeira chamada returns ProfileUpdateResult(updated=['nome','github_username'], skipped=[]). Segunda chamada returns ProfileUpdateResult(updated=[], skipped=['nome','github_username']) — célula já preenchida não é sobrescrita.",
+        "AC5: Email inexistente: update_profile retorna ProfileUpdateResult com flag/exceção clara (escolha: raise UserNotInRoster). Test cobre.",
+        "AC6: tests/test_roster_writer.py existe com >=6 testes passando: (a) get_row_index acha email existente, (b) get_row_index retorna None pra email ausente, (c) update_profile escreve em ambos campos quando vazios, (d) update_profile pula campo já preenchido (hijacking guard), (e) update_profile email inexistente raise UserNotInRoster, (f) valueInputOption é RAW (asserção via mock.call_args). Tests usam Mock(spec=Resource) ou pattern equivalente — não toca rede.",
+        "AC7: Validar [SUPOSIÇÃO 5] do plano (Sheets API permite update de célula isolada via values().update sem reescrever row): pesquisar na doc do googleapiclient ou ler test_sheets_writer.py existente pra confirmar API shape. Se hipótese falsa, documentar em progress.txt e ajustar pra batch update.",
+        "AC8: Nenhuma dependência nova no pyproject.toml (google-api-python-client e google-auth já estão lá). Não importa nada de app/sheets_writer.py — código duplicado é OK aqui (separação de concerns; Roster e Submissions são contratos diferentes).",
+        "AC9: Rodar 'pytest tests/test_roster_writer.py -v' e 'ruff check app/roster_writer.py tests/test_roster_writer.py'. Exit code 0 em ambos."
+      ],
+      "priority": 2,
+      "passes": true
+    },
+    {
+      "id": "US-03",
+      "title": "Endpoint POST /me/profile + estender /me/identity + invalidar cache",
+      "description": "Wirar a US-02 (RosterWriter) num endpoint HTTP que aluno usa pra completar profile. Mudanças em app/endpoints.py: (a) GET /me/identity passa a retornar campo 'github_username' (string, pode ser vazia) além de email/nome/turma — CLI precisa pra decidir se prompta; (b) novo POST /me/profile com body {nome: str, github_username: str} que: valida github_username com regex GitHub oficial '^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,38})$' (400 invalid_github_username se não bate), instancia RosterWriter(spreadsheet_id=os.environ['ROSTER_SHEET_ID']), chama update_profile(user.email, nome, github_username), invalida cache do roster (app.roster._clear_cache() ou equivalente — senão CLI vê próprio próximo /me/identity ainda vazio por até 5min), retorna 200 {updated: [...], skipped: [...]} ou 500 missing_roster_sheet_config se ROSTER_SHEET_ID não setado. Update docs/setup.md com seção 4.1 'Habilitar Sheets API + grant Editor na Roster Sheet' documentando os 4 passos manuais do plano (gcloud services enable, share Sheet, set env var, atualizar cloudbuild.yaml). Atualizar cloudbuild.yaml pra incluir ROSTER_SHEET_ID em --set-env-vars (defaulta vazio nas substitutions).",
+      "acceptanceCriteria": [
+        "AC1: GET /me/identity retorna JSON com 4 campos: email, nome, turma, github_username. Test em tests/test_endpoints_me.py (ou equivalente) cobre roster entry com github_username preenchido E vazio.",
+        "AC2: POST /me/profile com body válido {nome: 'Foo Bar', github_username: 'foo-bar'} chama RosterWriter.update_profile e retorna 200 com {updated: [...], skipped: [...]}. Test cobre: (a) ambos campos atualizados, (b) ambos já setados (updated=[], skipped=['nome','github_username']), (c) só um campo atualizado.",
+        "AC3: POST /me/profile com github_username inválido (ex: 'foo bar' com espaço, 'foo--bar' começando ou terminando com hífen, string >39 chars, vazio) retorna 400 com error='invalid_github_username'. Test cobre >=4 casos inválidos.",
+        "AC4: Cache do roster (app.roster._CACHE) é invalidado após update bem-sucedido. Test: mock RosterWriter, faz POST /me/profile, verifica que _CACHE foi limpo (assertEqual({}, app.roster._CACHE) ou usa app.roster._clear_cache).",
+        "AC5: POST /me/profile sem ROSTER_SHEET_ID env var setada retorna 500 com error='missing_roster_sheet_config'. Test cobre via monkeypatch.delenv.",
+        "AC6: Aluno autenticado mas com email não no roster: middleware já bloqueia com 403 not_in_roster antes do endpoint. Não testar redundantemente — só confirmar que /me/profile NÃO está em PUBLIC_PATHS (grep em app/auth.py).",
+        "AC7: docs/setup.md tem nova seção '4.1 Habilitar Sheets API + permissão de escrita na Roster Sheet' com os 4 passos manuais do plano (linkar pra Fatia 4 do plano). Idempotente: re-rodar os passos não quebra nada.",
+        "AC8: cloudbuild.yaml inclui ROSTER_SHEET_ID em substitutions (default '') e em --set-env-vars do gcloud run deploy. Verificar com grep que o nome aparece nos dois lugares.",
+        "AC9: Rodar 'pytest -q' inteiro do backend, exit code 0. Rodar 'ruff check app/ tests/' exit code 0.",
+        "AC10: Versão do backend bumpa 0.2.0 -> 0.3.0 (mudança de contrato HTTP: novo endpoint + novo campo em /me/identity).",
+        "AC11: Validar [SUPOSIÇÃO 4] do plano: app.roster expõe (ou esta story adiciona) função _clear_cache() callable de outro módulo. Se _CACHE for module-private sem getter, esta story adiciona _clear_cache() público em app/roster.py."
+      ],
+      "priority": 3,
+      "passes": true
+    }
+  ]
+}
