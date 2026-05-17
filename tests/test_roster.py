@@ -55,9 +55,49 @@ def test_parse_roster_missing_required_column_raises():
         parse_roster(csv_text)
 
 
-def test_parse_roster_empty_field_raises():
-    csv_text = "email,nome,turma,github_username\nana@idp.edu.br,,TD-2026-01,anasilva\n"
-    with pytest.raises(RosterValidationError, match="row 2.*nome.*vazio"):
+def test_parse_roster_aceita_github_username_vazio():
+    csv_text = (
+        "email,nome,turma,github_username\n"
+        "ana@idp.edu.br,Ana Silva,TD-2026-01,\n"
+    )
+    result = parse_roster(csv_text)
+    assert result["ana@idp.edu.br"] == RosterEntry(
+        email="ana@idp.edu.br",
+        nome="Ana Silva",
+        turma="TD-2026-01",
+        github_username="",
+    )
+
+
+def test_parse_roster_aceita_nome_vazio():
+    csv_text = (
+        "email,nome,turma,github_username\n"
+        "ana@idp.edu.br,,TD-2026-01,anasilva\n"
+    )
+    result = parse_roster(csv_text)
+    assert result["ana@idp.edu.br"] == RosterEntry(
+        email="ana@idp.edu.br",
+        nome="",
+        turma="TD-2026-01",
+        github_username="anasilva",
+    )
+
+
+def test_parse_roster_rejeita_email_vazio():
+    csv_text = (
+        "email,nome,turma,github_username\n"
+        ",Ana Silva,TD-2026-01,anasilva\n"
+    )
+    with pytest.raises(RosterValidationError, match="row 2.*email.*vazio"):
+        parse_roster(csv_text)
+
+
+def test_parse_roster_rejeita_turma_vazia():
+    csv_text = (
+        "email,nome,turma,github_username\n"
+        "ana@idp.edu.br,Ana Silva,,anasilva\n"
+    )
+    with pytest.raises(RosterValidationError, match="row 2.*turma.*vazio"):
         parse_roster(csv_text)
 
 
