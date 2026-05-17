@@ -100,43 +100,12 @@ JSON key, autentica via metadata server. `cloudbuild.yaml` não passa
 
 ---
 
-## 6b. ⏳ (Opcional) Habilitar auto-registro de alunos
-
-Permite alunos fora do roster se cadastrarem sozinhos via `POST /me/register`
-(fluxo emergencial para o início da disciplina, quando o roster ainda não está
-completo).
-
-1. **Compartilhar Roster Sheet com a Service Account** como **Editor**
-   (mesma SA do passo 6 — `1065810445001-compute@developer.gserviceaccount.com`).
-   Sem isso, o append falha com 502 `roster_write_unavailable`.
-2. **Aba do roster** com header `email, nome, turma, github_username` em A1:D1.
-   O nome da aba é o que vier em `ROSTER_SHEET_TAB` (default `roster`).
-3. **Env vars no Cloud Run**:
-   - `ROSTER_SHEET_ID` — ID da planilha (não a URL CSV).
-   - `ROSTER_SHEET_TAB` — opcional, default `roster`.
-   - `TURMAS_DISPONIVEIS` — vírgula-separada (ex: `TD-2026-01,TD-2026-02`).
-     Vazia desabilita o endpoint (503 `registration_disabled`).
-
-Validações: turma deve estar em `TURMAS_DISPONIVEIS`; `github_username` deve
-casar com regex de username GitHub (alfanumérico + hífen, 1-39 chars); email já
-no roster → 409 `already_registered`. Cache do roster (TTL 5min) é invalidado
-após cada append, então a request seguinte resolve o usuário recém-cadastrado.
-
-> **Quando desligar**: limpe `TURMAS_DISPONIVEIS=""` no Cloud Run. Endpoint
-> passa a devolver 503 sem precisar redeploy.
-
----
-
 ## 7. ⏳ Deploy do Cloud Run service
 
 ```bash
 gcloud builds submit --config=cloudbuild.yaml \
-  --substitutions=_GOOGLE_OAUTH_CLIENT_ID=...,_ROSTER_URL=...,_SHEET_ID=...,_ROSTER_SHEET_ID=...,_TURMAS_DISPONIVEIS=TD-2026-01,TD-2026-02
+  --substitutions=_GOOGLE_OAUTH_CLIENT_ID=...,_ROSTER_URL=...,_SHEET_ID=...
 ```
-
-> Auto-registro: passe `_ROSTER_SHEET_ID` (ID da planilha) e `_TURMAS_DISPONIVEIS`
-> (lista vírgula-separada). Omita ou deixe vazio para desabilitar o endpoint
-> `/me/register`. Veja **6b**.
 
 Notas sobre o cloudbuild:
 
@@ -202,9 +171,6 @@ Para habilitar deploy automático via `.github/workflows/cloud-run-deploy.yml` e
 | `ROSTER_URL`                    | 4              | não      |
 | `SHEET_ID`                      | 5              | não      |
 | `EXERCISES_BASE_URL`            | curriculum     | não — aponta pro raw do `assistente-aulas` |
-| `ROSTER_SHEET_ID`               | 6b (auto-registro) | não      |
-| `ROSTER_SHEET_TAB`              | 6b (default `roster`) | não      |
-| `TURMAS_DISPONIVEIS`            | 6b (vírgula-separada) | não      |
 
 Credenciais sensíveis ficam em **Cloud Run secrets** (Secret Manager), nunca em `.env` versionado.
 

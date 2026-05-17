@@ -10,10 +10,7 @@ from app.sheets_writer import (
     APPEND_RANGE,
     COLUMNS,
     ID_COLUMN_RANGE,
-    ROSTER_COLUMNS,
-    ROSTER_TAB_DEFAULT,
     AppendResult,
-    RosterWriter,
     SheetsWriter,
     SubmissionRow,
     _row_to_values,
@@ -272,44 +269,3 @@ async def test_empty_sheet_first_append() -> None:
         # This is acceptable for an empty-sheet first append edge case.
         sheet_row_index=-1,
     )
-
-
-# ---------- RosterWriter ---------------------------------------------------
-
-
-def test_roster_columns_match_required_roster_schema() -> None:
-    """ROSTER_COLUMNS deve bater com REQUIRED_COLUMNS de app/roster.py."""
-    from app.roster import REQUIRED_COLUMNS as ROSTER_REQUIRED
-
-    assert ROSTER_COLUMNS == ROSTER_REQUIRED
-
-
-@pytest.mark.asyncio
-async def test_roster_writer_append_member_writes_row() -> None:
-    service, mocks = _build_mock_service(get_responses=[])
-
-    writer = RosterWriter("roster-sheet-id", service=service)
-    await writer.append_member(
-        "novato@dominio.edu", "Aluno Novato", "TD-2026-01", "novato-gh"
-    )
-
-    mocks["values"].append.assert_called_once()
-    kwargs = mocks["values"].append.call_args.kwargs
-    assert kwargs["spreadsheetId"] == "roster-sheet-id"
-    assert kwargs["range"] == ROSTER_TAB_DEFAULT
-    assert kwargs["valueInputOption"] == "RAW"
-    assert kwargs["insertDataOption"] == "INSERT_ROWS"
-    assert kwargs["body"] == {
-        "values": [["novato@dominio.edu", "Aluno Novato", "TD-2026-01", "novato-gh"]]
-    }
-
-
-@pytest.mark.asyncio
-async def test_roster_writer_respects_custom_tab_name() -> None:
-    service, mocks = _build_mock_service(get_responses=[])
-
-    writer = RosterWriter("roster-sheet-id", tab_name="alunos", service=service)
-    await writer.append_member("a@b.com", "Nome", "T1", "user")
-
-    kwargs = mocks["values"].append.call_args.kwargs
-    assert kwargs["range"] == "alunos"

@@ -19,11 +19,6 @@ logger = logging.getLogger(__name__)
 
 PUBLIC_PATHS = frozenset({"/healthz", "/oauth/exchange", "/oauth/refresh"})
 
-# Paths que exigem Google ID Token válido mas NÃO exigem entrada no roster
-# (usados pra fluxo de auto-registro — aluno autentica antes de existir no
-# roster). Acessam apenas request.state.google_user, não request.state.user.
-GOOGLE_ONLY_PATHS = frozenset({"/me/register", "/turmas"})
-
 
 @dataclass(frozen=True)
 class GoogleUser:
@@ -116,22 +111,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
             google_user = await asyncio.to_thread(verify_google_id_token, token)
         except AuthError as exc:
             return _json_error(correlation_id, exc.status_code, exc.error, exc.message)
-
-        # Google-only paths (ex.: /me/register, /turmas): pula roster lookup
-        # pra permitir aluno fora do roster fazer auto-registro.
-        request.state.google_user = google_user
-        if request.url.path in GOOGLE_ONLY_PATHS:
-            logger.info(
-                "auth_google_only_ok",
-                extra={
-                    "correlation_id": correlation_id,
-                    "email": google_user.email,
-                    "path": request.url.path,
-                },
-            )
-            response = await call_next(request)
-            response.headers["X-Correlation-Id"] = correlation_id
-            return response
 
         try:
             roster = await asyncio.to_thread(get_roster)
