@@ -17,7 +17,7 @@
         "AC6: Rodar 'ruff check app/roster.py tests/test_roster.py' e 'pytest -q' inteiros sem regressão. Capturar exit code 0 em ambos."
       ],
       "priority": 1,
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-02",
