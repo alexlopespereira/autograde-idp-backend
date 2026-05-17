@@ -35,7 +35,7 @@
         "AC9: Rodar 'pytest tests/test_roster_writer.py -v' e 'ruff check app/roster_writer.py tests/test_roster_writer.py'. Exit code 0 em ambos."
       ],
       "priority": 2,
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-03",
