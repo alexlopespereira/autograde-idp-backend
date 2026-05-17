@@ -55,7 +55,7 @@
         "AC11: Validar [SUPOSIÇÃO 4] do plano: app.roster expõe (ou esta story adiciona) função _clear_cache() callable de outro módulo. Se _CACHE for module-private sem getter, esta story adiciona _clear_cache() público em app/roster.py."
       ],
       "priority": 3,
-      "passes": false
+      "passes": true
     }
   ]
 }
