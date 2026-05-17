@@ -127,9 +127,9 @@ def get_roster_writer() -> RosterWriter:
     return RosterWriter(sheet_id)
 
 
-# Regex GitHub username: começa e termina com alnum, até 39 chars no total.
-# Single-char alnum vale (grupo opcional). Trailing hyphen ('foo-') é rejeitado.
-GITHUB_USERNAME_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$")
+# Regex GitHub username: começa com alnum, até 39 chars, hífen só entre alnums.
+# Lookahead (?=[a-zA-Z0-9]) impede trailing hyphen e hífens consecutivos ('foo--bar').
+GITHUB_USERNAME_RE = re.compile(r"^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$")
 
 
 class ProfileUpdateRequestBody(BaseModel):

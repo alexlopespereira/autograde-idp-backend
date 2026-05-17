@@ -1164,6 +1164,8 @@ async def test_me_profile_only_one_field_updated(patches) -> None:
         "a" * 40,  # > 39 chars
         "-foo",  # começa com hífen
         "foo-",  # termina com hífen
+        "foo--bar",  # hífens consecutivos
+        "a--b",  # hífens consecutivos curto
     ],
 )
 @pytest.mark.asyncio
