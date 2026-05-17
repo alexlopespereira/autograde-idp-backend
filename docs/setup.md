@@ -68,6 +68,57 @@ Schema obrigatório (uma linha por aluno, primeira linha é header):
 
 ---
 
+## 4.1 ⏳ Habilitar Sheets API + permissão de escrita na Roster Sheet
+
+Pré-requisito do endpoint `POST /me/profile` (Fatia 4 do plano
+[`cadastro-alunos-2026.md`](../.claude/plans/cadastro-alunos-2026.md)). O backend
+escreve `nome` e `github_username` na Roster Sheet quando o aluno completa o
+perfil no primeiro login — precisa de Sheets API habilitada **e** Editor na
+Sheet (não basta o link público de leitura do passo 4).
+
+Os 4 passos abaixo são **idempotentes** — re-rodar não quebra nada:
+
+1. Habilitar a Sheets API no projeto GCP:
+
+   ```bash
+   gcloud services enable sheets.googleapis.com --project=autograde-314802
+   ```
+
+2. Compartilhar a **Roster Sheet** com a default compute SA como **Editor**:
+
+   ```
+   1065810445001-compute@developer.gserviceaccount.com
+   ```
+
+   (Sheet → Share → Add people → Editor → Send. Mesmo princípio do passo 6
+   pra Submissions Sheet — Editor é o mínimo pra `values().update`.)
+
+3. Setar a env var `ROSTER_SHEET_ID` localmente para teste:
+
+   ```bash
+   export ROSTER_SHEET_ID=<SHEET_ID>  # mesmo SHEET_ID do passo 4
+   ```
+
+   > `ROSTER_SHEET_ID` é o ID puro (entre `/d/` e `/edit` na URL).
+   > `ROSTER_URL` é a versão CSV public-link (leitura via HTTP no
+   > AuthMiddleware). Os dois apontam pra mesma Sheet — IDs separados porque
+   > o caminho de escrita usa o Sheets API SDK (não HTTP CSV).
+
+4. No `cloudbuild.yaml` (já feito nesta versão): a substitution
+   `_ROSTER_SHEET_ID` e a env var `ROSTER_SHEET_ID` em `--set-env-vars` já
+   estão wireadas. Passar o valor no deploy:
+
+   ```bash
+   gcloud builds submit --config=cloudbuild.yaml \
+     --substitutions=_ROSTER_SHEET_ID=<SHEET_ID>,...
+   ```
+
+   Se a env var ficar vazia, `POST /me/profile` retorna 500
+   `missing_roster_sheet_config` — aluno consegue logar (auth ainda lê CSV
+   público) mas não consegue completar perfil.
+
+---
+
 ## 5. ⏳ Criar Submissions Sheet
 
 Planilha onde o backend grava cada submissão (append-only, audit trail das notas).
@@ -169,6 +220,7 @@ Para habilitar deploy automático via `.github/workflows/cloud-run-deploy.yml` e
 | `GOOGLE_OAUTH_CLIENT_SECRET`    | 2              | sim — secret |
 | `GITHUB_PAT`                    | 3              | sim — secret |
 | `ROSTER_URL`                    | 4              | não      |
+| `ROSTER_SHEET_ID`               | 4.1            | não      |
 | `SHEET_ID`                      | 5              | não      |
 | `EXERCISES_BASE_URL`            | curriculum     | não — aponta pro raw do `assistente-aulas` |
 
