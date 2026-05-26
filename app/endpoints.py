@@ -175,6 +175,7 @@ def _bulletin_to_dict(b: Bulletin) -> dict[str, Any]:
         "criterios": [asdict(c) for c in b.criterios],
         "total": b.total,
         "max_total": b.max_total,
+        "judge_degraded": any(c.degraded for c in b.criterios),
     }
 
 
@@ -467,6 +468,7 @@ async def submissions(body: SubmissionRequestBody, request: Request) -> Any:
         respostas_json=(
             json.dumps(respostas_payload, ensure_ascii=False) if respostas_payload else ""
         ),
+        judge_degraded=any(c.degraded for c in bulletin.criterios),
     )
 
     result: AppendResult = await writer.append_submission(row)

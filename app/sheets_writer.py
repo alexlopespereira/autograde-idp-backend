@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 
 SHEET_TAB = "submissoes"
 ID_COLUMN_RANGE = f"{SHEET_TAB}!B:B"
-READ_RANGE = f"{SHEET_TAB}!A:R"
+READ_RANGE = f"{SHEET_TAB}!A:S"
 APPEND_RANGE = SHEET_TAB
 SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
 
@@ -61,6 +61,7 @@ COLUMNS: tuple[str, ...] = (
     "spec_sha",
     "ai_evidence_hashes",
     "respostas_json",
+    "judge_degraded",
 )
 
 
@@ -84,6 +85,10 @@ class SubmissionRow:
     spec_sha: str
     ai_evidence_hashes: str = ""
     respostas_json: str = ""
+    # Flag de audit: True quando ≥1 critério teve nota de fallback degradado
+    # (LLM-judge indisponível). Coluna S na Sheet — filtra os que precisam de
+    # re-correção manual. Header manual em S1: "judge_degraded".
+    judge_degraded: bool = False
 
 
 @dataclass(frozen=True)

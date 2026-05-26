@@ -1220,3 +1220,36 @@ async def test_me_profile_missing_roster_sheet_config_returns_500(patches) -> No
     )
     assert response.status_code == 500
     assert response.json() == {"error": "missing_roster_sheet_config"}
+
+
+# ---------- _bulletin_to_dict: flag judge_degraded -------------------------
+
+
+def test_bulletin_to_dict_flags_judge_degraded_true() -> None:
+    from app.grader import Bulletin
+
+    b = Bulletin(
+        criterios=(
+            CriterioResult(True, 10, 10, "ok"),
+            CriterioResult(True, 20, 20, "[fallback judge]", degraded=True),
+        ),
+        total=30,
+        max_total=30,
+    )
+    d = endpoints_module._bulletin_to_dict(b)
+    assert d["judge_degraded"] is True
+    # per-critério também é serializado (asdict inclui degraded)
+    assert d["criterios"][1]["degraded"] is True
+    assert d["criterios"][0]["degraded"] is False
+
+
+def test_bulletin_to_dict_judge_degraded_false_when_all_ok() -> None:
+    from app.grader import Bulletin
+
+    b = Bulletin(
+        criterios=(CriterioResult(True, 10, 10, "ok"),),
+        total=10,
+        max_total=10,
+    )
+    d = endpoints_module._bulletin_to_dict(b)
+    assert d["judge_degraded"] is False
