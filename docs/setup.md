@@ -180,35 +180,63 @@ Notas sobre o cloudbuild:
 
 ---
 
-## 8. ⏳ (Opcional) Workload Identity Federation para CI/CD
+## 8. ✅ Workload Identity Federation para CI/CD (configurado 2026-05-26)
 
-Para habilitar deploy automático via `.github/workflows/cloud-run-deploy.yml` em push pra `main`:
+Deploy via `.github/workflows/cloud-run-deploy.yml` (disparo **manual**
+`workflow_dispatch`). O build roda no runner (docker build + push pra
+`gcr.io`/Artifact Registry + `gcloud run deploy --image`) porque
+`gcloud builds submit` com credencial WIF trava em `serviceusage.services.use`
+no bucket de source. `PROJECT_NUMBER = 1065810445001`.
 
-1. Criar Workload Identity Pool + Provider:
+1. SA de deploy + roles (mínimas pro caminho runner-build):
+   ```bash
+   gcloud iam service-accounts create autograde-deploy \
+     --display-name="GitHub Actions deploy (WIF)" --project=autograde-314802
+   for R in roles/run.admin roles/artifactregistry.writer; do
+     gcloud projects add-iam-policy-binding autograde-314802 \
+       --member="serviceAccount:autograde-deploy@autograde-314802.iam.gserviceaccount.com" \
+       --role="$R" --condition=None
+   done
+   # impersonar a SA de runtime do Cloud Run (default compute SA):
+   gcloud iam service-accounts add-iam-policy-binding \
+     1065810445001-compute@developer.gserviceaccount.com \
+     --member="serviceAccount:autograde-deploy@autograde-314802.iam.gserviceaccount.com" \
+     --role=roles/iam.serviceAccountUser
+   ```
+
+2. WIF pool + provider (attribute-condition trava no dono do repo — sem
+   condition o gcloud recusa criar):
    ```bash
    gcloud iam workload-identity-pools create github --location=global
    gcloud iam workload-identity-pools providers create-oidc github-provider \
      --location=global --workload-identity-pool=github \
      --issuer-uri=https://token.actions.githubusercontent.com \
-     --attribute-mapping=google.subject=assertion.sub,attribute.repository=assertion.repository
+     --attribute-mapping=google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner \
+     --attribute-condition="assertion.repository_owner == 'alexlopespereira'"
    ```
 
-2. Permitir o repo a impersonar a SA de deploy:
+3. Permitir SÓ este repo impersonar a SA:
    ```bash
    gcloud iam service-accounts add-iam-policy-binding \
      autograde-deploy@autograde-314802.iam.gserviceaccount.com \
      --role=roles/iam.workloadIdentityUser \
-     --member="principalSet://iam.googleapis.com/projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/github/attribute.repository/alexlopespereira/autograde-idp-backend"
+     --member="principalSet://iam.googleapis.com/projects/1065810445001/locations/global/workloadIdentityPools/github/attribute.repository/alexlopespereira/autograde-idp-backend"
    ```
 
-3. Adicionar GitHub secrets ao repo:
-   - `GCP_WORKLOAD_IDENTITY_PROVIDER`: `projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/github/providers/github-provider`
+4. GitHub secrets (`gh secret set <NOME> -R alexlopespereira/autograde-idp-backend`):
+   - `GCP_WORKLOAD_IDENTITY_PROVIDER`: `projects/1065810445001/locations/global/workloadIdentityPools/github/providers/github-provider`
    - `GCP_SERVICE_ACCOUNT`: `autograde-deploy@autograde-314802.iam.gserviceaccount.com`
-   - `GCP_PROJECT_ID`: `autograde-314802`
-   - `GCP_REGION`: `southamerica-east1`
-   - `GOOGLE_OAUTH_CLIENT_ID`, `ROSTER_URL`, `SHEET_ID`: valores reais.
+   - `GCP_PROJECT_ID`: `autograde-314802` · `GCP_REGION`: `southamerica-east1`
+   - `GOOGLE_OAUTH_CLIENT_ID`, `ROSTER_URL`, `SHEET_ID`, `ROSTER_SHEET_ID`,
+     `RATE_LIMIT_BYPASS_EMAILS`: valores reais (ver §Resumo).
 
-4. Editar `.github/workflows/cloud-run-deploy.yml` e habilitar `on: push: branches: [main]`.
+5. Disparar: `gh workflow run cloud-run-deploy.yml -R alexlopespereira/autograde-idp-backend`.
+
+> Notas: o auth usa `token_format: access_token` (chamadas saem como a SA, não
+> como external_account, evitando o erro de serviceusage). As flags de deploy
+> no workflow espelham `cloudbuild.yaml` (deploy manual) — manter em sync.
+> `push: branches: [main]` fica desligado de propósito (turma ativa: merge
+> quebrado iria direto pra prod).
 
 ---
 
