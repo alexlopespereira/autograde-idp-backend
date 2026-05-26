@@ -1,15 +1,24 @@
 name: cloud-run-deploy
 
-# Disparo manual por enquanto. Habilitar `push: branches: [main]` quando
-# Workload Identity Federation estiver configurada (ver docs/setup.md §8).
+# Disparo manual (workflow_dispatch). NÃO habilitar push:[main] com turma
+# ativa — um merge quebrado iria direto pra produção.
+#
+# Build roda no runner (docker build + push pra gcr.io/Artifact Registry) e
+# o deploy é `gcloud run deploy --image`. Evita `gcloud builds submit`, que
+# com credencial WIF trava em "serviceusage.services.use" no bucket de source.
+#
+# Pré-requisito: WIF + secrets configurados (docs/setup.md §8). SA de deploy
+# precisa de: cloudbuild.builds.editor NÃO é mais necessário; agora usa
+# run.admin + artifactregistry.writer + iam.serviceAccountUser (na compute SA).
+#
+# ATENÇÃO: as flags de deploy abaixo espelham cloudbuild.yaml (usado no deploy
+# manual). Mantenha os dois em sync ao mudar env vars / secrets / escala.
 on:
   workflow_dispatch:
-  # push:
-  #   branches: [main]
 
 jobs:
   deploy:
-    name: gcloud builds submit
+    name: build + deploy to Cloud Run
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -22,9 +31,6 @@ jobs:
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          # access_token (em vez do arquivo external_account) evita o erro
-          # "serviceusage.services.use" do `gcloud builds submit`: as chamadas
-          # saem como a própria SA, sem resolução de quota project.
           token_format: 'access_token'
 
       - name: Set up gcloud
@@ -32,13 +38,24 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Submit Cloud Build
-        # SHORT_SHA: `gcloud builds submit` faz upload de tarball (sem contexto
-        # de commit), então SHORT_SHA built-in vem vazio e o tag da imagem fica
-        # inválido — passamos github.sha (7 chars) explicitamente.
-        # _ROSTER_SHEET_ID e _RATE_LIMIT_BYPASS_EMAILS são obrigatórios: o
-        # cloudbuild usa --set-env-vars (substitui TUDO); sem eles o deploy
-        # zeraria essas env vars em produção.
+      - name: Configure docker for gcr.io
+        run: gcloud auth configure-docker gcr.io --quiet
+
+      - name: Build & push image
         run: |
-          gcloud builds submit --config=cloudbuild.yaml \
-            --substitutions="SHORT_SHA=${GITHUB_SHA::7},_REGION=${{ secrets.GCP_REGION }},_GOOGLE_OAUTH_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_CLIENT_ID }},_ROSTER_URL=${{ secrets.ROSTER_URL }},_SHEET_ID=${{ secrets.SHEET_ID }},_ROSTER_SHEET_ID=${{ secrets.ROSTER_SHEET_ID }},_RATE_LIMIT_BYPASS_EMAILS=${{ secrets.RATE_LIMIT_BYPASS_EMAILS }}"
+          IMAGE="gcr.io/${{ secrets.GCP_PROJECT_ID }}/autograde-backend:${GITHUB_SHA::7}"
+          docker build -t "$IMAGE" -t "gcr.io/${{ secrets.GCP_PROJECT_ID }}/autograde-backend:latest" .
+          docker push "$IMAGE"
+          docker push "gcr.io/${{ secrets.GCP_PROJECT_ID }}/autograde-backend:latest"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy autograde-backend \
+            --image="$IMAGE" \
+            --region=${{ secrets.GCP_REGION }} \
+            --platform=managed \
+            --max-instances=1 --concurrency=200 --cpu-boost --min-instances=0 \
+            --allow-unauthenticated \
+            --set-env-vars="GOOGLE_OAUTH_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_CLIENT_ID }},ROSTER_URL=${{ secrets.ROSTER_URL }},SHEET_ID=${{ secrets.SHEET_ID }},ROSTER_SHEET_ID=${{ secrets.ROSTER_SHEET_ID }},EXERCISES_BASE_URL=https://raw.githubusercontent.com/alexlopespereira/idp_governodigital/main/exercicios,RATE_LIMIT_BYPASS_EMAILS=${{ secrets.RATE_LIMIT_BYPASS_EMAILS }}" \
+            --update-secrets="GITHUB_PAT=github-pat:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,GEMINI_API_KEY=gemini-api-key:latest"
