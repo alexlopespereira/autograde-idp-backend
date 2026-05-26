@@ -29,6 +29,12 @@ jobs:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Submit Cloud Build
+        # SHORT_SHA: `gcloud builds submit` faz upload de tarball (sem contexto
+        # de commit), então SHORT_SHA built-in vem vazio e o tag da imagem fica
+        # inválido — passamos github.sha (7 chars) explicitamente.
+        # _ROSTER_SHEET_ID e _RATE_LIMIT_BYPASS_EMAILS são obrigatórios: o
+        # cloudbuild usa --set-env-vars (substitui TUDO); sem eles o deploy
+        # zeraria essas env vars em produção.
         run: |
           gcloud builds submit --config=cloudbuild.yaml \
-            --substitutions=_REGION=${{ secrets.GCP_REGION }},_GOOGLE_OAUTH_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_CLIENT_ID }},_ROSTER_URL=${{ secrets.ROSTER_URL }},_SHEET_ID=${{ secrets.SHEET_ID }}
+            --substitutions="SHORT_SHA=${GITHUB_SHA::7},_REGION=${{ secrets.GCP_REGION }},_GOOGLE_OAUTH_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_CLIENT_ID }},_ROSTER_URL=${{ secrets.ROSTER_URL }},_SHEET_ID=${{ secrets.SHEET_ID }},_ROSTER_SHEET_ID=${{ secrets.ROSTER_SHEET_ID }},_RATE_LIMIT_BYPASS_EMAILS=${{ secrets.RATE_LIMIT_BYPASS_EMAILS }}"
