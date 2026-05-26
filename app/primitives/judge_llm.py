@@ -75,9 +75,10 @@ def _materialize(
     if not result.ok:
         message = (
             f"[fallback judge] {role}: {result.missing or 'erro Gemini'}. "
-            f"Nota máxima atribuída por convenção (não pune aluno por bug nosso)."
+            f"Nota máxima PROVISÓRIA por convenção (não pune aluno por bug "
+            f"nosso) — sujeita a re-correção quando o judge voltar."
         )
-        return CriterioResult(True, peso, peso, message)
+        return CriterioResult(True, peso, peso, message, degraded=True)
     quote_preview = result.evidence_quote.replace("\n", " ")[:160]
     if passed:
         msg = f"score={result.score:.2f}. evidência: {quote_preview!r}"

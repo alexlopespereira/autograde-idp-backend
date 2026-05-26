@@ -10,6 +10,10 @@ class CriterioResult:
     points_earned: int
     points_max: int
     message: str
+    # True quando a nota deste critério veio de um fallback degradado (ex:
+    # LLM-judge indisponível → nota cheia por convenção). Sinaliza ao boletim
+    # e à planilha de audit que a nota é PROVISÓRIA e merece re-correção manual.
+    degraded: bool = False
 
 
 @runtime_checkable

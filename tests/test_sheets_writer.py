@@ -83,10 +83,10 @@ def _build_mock_service(
 # ---------- dataclass ------------------------------------------------------
 
 
-def test_columns_count_is_18() -> None:
-    # 17 originais + respostas_json (perguntas subjetivas com grading Gemini)
-    assert len(COLUMNS) == 18
-    assert COLUMNS[-1] == "respostas_json"
+def test_columns_count_is_19() -> None:
+    # 18 anteriores + judge_degraded (flag de audit do LLM-judge degradado)
+    assert len(COLUMNS) == 19
+    assert COLUMNS[-1] == "judge_degraded"
 
 
 def test_row_to_values_preserves_column_order() -> None:
@@ -97,7 +97,8 @@ def test_row_to_values_preserves_column_order() -> None:
     assert values[2] == "aluno@idp.edu.br"  # email
     assert values[16] == ""  # ai_evidence_hashes default
     assert values[17] == ""  # respostas_json default
-    assert len(values) == len(COLUMNS) == 18
+    assert values[18] is False  # judge_degraded default
+    assert len(values) == len(COLUMNS) == 19
 
 
 def test_submission_row_default_ai_evidence_empty() -> None:

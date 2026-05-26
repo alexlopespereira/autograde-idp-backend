@@ -137,6 +137,21 @@ def test_meta_prompt_quality_fallback_when_ok_false(monkeypatch: pytest.MonkeyPa
     assert r.passed is True
     assert r.points_earned == 20
     assert "fallback" in r.message.lower()
+    # Auditoria: fallback marca degraded=True (nota provisória, re-correção)
+    assert r.degraded is True
+
+
+def test_meta_prompt_quality_not_degraded_when_ok_true(monkeypatch: pytest.MonkeyPatch):
+    _stub_judge(
+        monkeypatch,
+        JudgeResult(score=0.8, evidence_quote="ok", missing="", ok=True),
+    )
+    r = registry["judge.artifacts.meta_prompt_quality"](
+        {"_peso": 20, "role": "meta_prompt"},
+        _ev(_entry("meta_prompt", content="x")),
+    )
+    # judge respondeu normalmente → nota é definitiva, não degradada
+    assert r.degraded is False
 
 
 def test_meta_prompt_quality_passes_metadata_to_judge(monkeypatch: pytest.MonkeyPatch):
