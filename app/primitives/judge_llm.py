@@ -354,3 +354,188 @@ def relations_explicit(args: dict, evidence: dict) -> CriterioResult:
         "- 0.0: lista solta"
     )
     return _materialize(peso, role, _call_judge(rubrica, role, entry))
+
+
+# ---------------------------------------------------------------------------
+# Primitive: audit_finds_real_issues (B10 — cadeia de auditoria)
+# ---------------------------------------------------------------------------
+
+
+@register("judge.artifacts.audit_finds_real_issues")
+def audit_finds_real_issues(args: dict, evidence: dict) -> CriterioResult:
+    """Avalia se a auditoria aponta ≥1 falha REAL (não cosmética).
+
+    Recebe AUDITORIA + PESQUISA AUDITADA concatenadas pro judge poder
+    confirmar que as falhas apontadas são reais em relação ao texto auditado.
+    Substitui semanticamente ``divergence_real`` no fluxo de 5 arquivos do 2.1
+    (síntese morreu; a divergência agora vem dentro da auditoria).
+    """
+    peso = _peso(args)
+    role_audit = _str_arg(args, "role_audit", "auditoria_v1")
+    role_audited = _str_arg(args, "role_audited", "assistente_v1")
+    entry_audit = _artifact_by_role(evidence, role_audit)
+    entry_audited = _artifact_by_role(evidence, role_audited)
+    if entry_audit is None or not entry_audit.get("exists"):
+        return _miss_artifact(peso, role_audit)
+    if entry_audited is None or not entry_audited.get("exists"):
+        return _miss_artifact(peso, role_audited)
+    rubrica = (
+        "Você vai avaliar uma AUDITORIA feita por um assistente de IA sobre "
+        "uma PESQUISA de outro assistente. Confirme se a auditoria identifica "
+        "pelo menos UMA falha REAL — não cosmética — na pesquisa.\n\n"
+        "Falha real: erro factual, lacuna de evidência, inferência mal-"
+        "suportada, fonte fraca/ausente, atribuição incorreta, ator omitido "
+        "relevante.\n\n"
+        "Falha cosmética (rejeitar): formatação, estilo de escrita, uso de "
+        "bullet vs prosa, ordem de apresentação.\n\n"
+        "Score:\n"
+        "- 1.0: ≥1 falha real claramente articulada com referência ao trecho "
+        "auditado\n"
+        "- 0.5: falha identificada mas vagamente OU sem referência clara\n"
+        "- 0.0: apenas reformulação/echo da pesquisa, sem crítica real"
+    )
+    combined = (
+        f"=== AUDITORIA ({role_audit}) ===\n"
+        f"{entry_audit.get('content', '')}\n\n"
+        f"=== PESQUISA AUDITADA ({role_audited}) ===\n"
+        f"{entry_audited.get('content', '')}\n"
+    )
+    combined_entry: dict[str, Any] = {
+        "content": combined,
+        "headings": (entry_audit.get("headings") or [])
+        + (entry_audited.get("headings") or []),
+        "word_count": _int_arg(entry_audit, "word_count")
+        + _int_arg(entry_audited, "word_count"),
+        "links": (entry_audit.get("links") or [])
+        + (entry_audited.get("links") or []),
+    }
+    label = f"{role_audit}+{role_audited}"
+    return _materialize(peso, label, _call_judge(rubrica, label, combined_entry))
+
+
+# ---------------------------------------------------------------------------
+# Primitive: iteration_addresses_audit (B11 — cadeia de auditoria)
+# ---------------------------------------------------------------------------
+
+
+@register("judge.artifacts.iteration_addresses_audit")
+def iteration_addresses_audit(args: dict, evidence: dict) -> CriterioResult:
+    """Avalia se a iteração v2 ABORDA as falhas da audit_v1.
+
+    Cada falha da auditoria deve receber tratamento (a) correção textual
+    substantiva, (b) defesa fundamentada, ou (c) "em aberto" explícito.
+    Ignorar = falha. Substitui ``resolution_offered`` no 2.1 (síntese morreu).
+    """
+    peso = _peso(args)
+    role_iteration = _str_arg(args, "role_iteration", "assistente_v2")
+    role_audit = _str_arg(args, "role_audit", "auditoria_v1")
+    entry_iter = _artifact_by_role(evidence, role_iteration)
+    entry_audit = _artifact_by_role(evidence, role_audit)
+    if entry_iter is None or not entry_iter.get("exists"):
+        return _miss_artifact(peso, role_iteration)
+    if entry_audit is None or not entry_audit.get("exists"):
+        return _miss_artifact(peso, role_audit)
+    rubrica = (
+        "Você vai avaliar se uma ITERAÇÃO (v2) de uma pesquisa ABORDA as "
+        "falhas apontadas na AUDITORIA da v1. Cada falha da auditoria deve "
+        "receber UM dos tratamentos:\n"
+        "(a) corrigida com texto substantivamente diferente\n"
+        "(b) defendida com argumento contrário citando evidência\n"
+        "(c) marcada explicitamente como em-aberto / pendente\n\n"
+        "Ignorar a falha (continuar do mesmo jeito sem mencionar) NÃO conta "
+        "como abordar.\n\n"
+        "Score:\n"
+        "- 1.0: cada falha da auditoria tem tratamento (a), (b) ou (c)\n"
+        "- 0.5: parte das falhas abordada, parte ignorada\n"
+        "- 0.0: iteração ignora a auditoria OU é idêntica em substância à v1"
+    )
+    combined = (
+        f"=== ITERAÇÃO ({role_iteration}) ===\n"
+        f"{entry_iter.get('content', '')}\n\n"
+        f"=== AUDITORIA A SER ABORDADA ({role_audit}) ===\n"
+        f"{entry_audit.get('content', '')}\n"
+    )
+    combined_entry: dict[str, Any] = {
+        "content": combined,
+        "headings": (entry_iter.get("headings") or [])
+        + (entry_audit.get("headings") or []),
+        "word_count": _int_arg(entry_iter, "word_count")
+        + _int_arg(entry_audit, "word_count"),
+        "links": (entry_iter.get("links") or [])
+        + (entry_audit.get("links") or []),
+    }
+    label = f"{role_iteration}+{role_audit}"
+    return _materialize(peso, label, _call_judge(rubrica, label, combined_entry))
+
+
+# ---------------------------------------------------------------------------
+# Primitive: iteration_substantive_evolution (B12 — cadeia de auditoria)
+# ---------------------------------------------------------------------------
+
+
+@register("judge.artifacts.iteration_substantive_evolution")
+def iteration_substantive_evolution(args: dict, evidence: dict) -> CriterioResult:
+    """Avalia se v3 evolui substantivamente sobre v2 pelo gatilho audit_v2.
+
+    Cada delta da v3 deve ser CONCRETO (não cosmético) E citar GATILHO
+    rastreável à audit_v2. Substitui ``evolution_substantive`` no 2.1
+    (síntese versionada morreu; agora as versões são arquivos separados).
+    """
+    peso = _peso(args)
+    role_after = _str_arg(args, "role_after", "assistente_v3")
+    role_before = _str_arg(args, "role_before", "assistente_v2")
+    role_trigger = _str_arg(args, "role_trigger", "auditoria_v2")
+    entry_after = _artifact_by_role(evidence, role_after)
+    entry_before = _artifact_by_role(evidence, role_before)
+    entry_trigger = _artifact_by_role(evidence, role_trigger)
+    if entry_after is None or not entry_after.get("exists"):
+        return _miss_artifact(peso, role_after)
+    if entry_before is None or not entry_before.get("exists"):
+        return _miss_artifact(peso, role_before)
+    if entry_trigger is None or not entry_trigger.get("exists"):
+        return _miss_artifact(peso, role_trigger)
+    rubrica = (
+        "Você vai avaliar se uma ITERAÇÃO (v3) de uma pesquisa mostra "
+        "EVOLUÇÃO SUBSTANTIVA sobre a ITERAÇÃO ANTERIOR (v2), disparada "
+        "pela AUDITORIA da v2 (gatilho).\n\n"
+        "Cada delta substantivo deve:\n"
+        "1. Ser CONCRETO (mudou posição, adicionou fonte, resolveu lacuna, "
+        "abriu pergunta nova) — não reformulação cosmética.\n"
+        "2. Citar o GATILHO concreto da auditoria que motivou a mudança.\n\n"
+        "Rejeitar (score 0):\n"
+        "- v3 idêntico em substância à v2 (reescrita sem novo conteúdo)\n"
+        "- 'Refleti melhor' / 'pensando bem' sem gatilho concreto\n"
+        "- v3 ignora completamente a auditoria\n\n"
+        "Score:\n"
+        "- 1.0: ≥1 delta + gatilho concretos\n"
+        "- 0.5: deltas presentes mas gatilhos vagos\n"
+        "- 0.0: cosmético OU ignora a auditoria"
+    )
+    combined = (
+        f"=== ITERAÇÃO ANTERIOR ({role_before}) ===\n"
+        f"{entry_before.get('content', '')}\n\n"
+        f"=== AUDITORIA (GATILHO) ({role_trigger}) ===\n"
+        f"{entry_trigger.get('content', '')}\n\n"
+        f"=== NOVA ITERAÇÃO ({role_after}) ===\n"
+        f"{entry_after.get('content', '')}\n"
+    )
+    combined_entry: dict[str, Any] = {
+        "content": combined,
+        "headings": (
+            (entry_before.get("headings") or [])
+            + (entry_trigger.get("headings") or [])
+            + (entry_after.get("headings") or [])
+        ),
+        "word_count": (
+            _int_arg(entry_before, "word_count")
+            + _int_arg(entry_trigger, "word_count")
+            + _int_arg(entry_after, "word_count")
+        ),
+        "links": (
+            (entry_before.get("links") or [])
+            + (entry_trigger.get("links") or [])
+            + (entry_after.get("links") or [])
+        ),
+    }
+    label = f"{role_after}<-{role_before}+{role_trigger}"
+    return _materialize(peso, label, _call_judge(rubrica, label, combined_entry))
