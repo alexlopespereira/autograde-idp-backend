@@ -289,6 +289,38 @@ def test_actor_map_quality_concatenates_map_and_transcript(
     assert "2 IA" in capture["rubrica"]
 
 
+def test_actor_map_quality_omits_typing_when_min_humans_and_min_ai_zero(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Quando o YAML não exige humanos/IA (min=0), a rubric NÃO menciona
+    tipagem humanos/IA — exercício genérico de mapa de atores."""
+    capture: dict[str, Any] = {}
+    _stub_judge(monkeypatch, JudgeResult(0.8, "ok", "", True), capture)
+    registry["judge.artifacts.actor_map_quality"](
+        {
+            "_peso": 24,
+            "role_map": "actor_map",
+            "role_transcript": "grill_transcript",
+            "min_actors": 7,
+            "min_humans": 0,
+            "min_ai": 0,
+        },
+        _ev(
+            _entry("actor_map", content="MAPA"),
+            _entry("grill_transcript", content="TRANSCRIPT"),
+        ),
+    )
+    rub = capture["rubrica"]
+    # contagem mínima de atores ainda aparece, mas SEM cláusula de tipagem
+    assert "(≥7 atores):" in rub  # nada anexado tipo ", ≥X humanos, ≥X IA"
+    assert "humanos" not in rub
+    assert "tipagem" not in rub
+    # ainda cobra contagem coerente + consistência + decisões
+    assert "categorias coerentes" in rub
+    assert "CONSISTÊNCIA" in rub
+    assert "DECISÕES CITADAS" in rub
+
+
 def test_actor_map_quality_misses_when_transcript_absent(
     monkeypatch: pytest.MonkeyPatch,
 ):
