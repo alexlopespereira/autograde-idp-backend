@@ -158,7 +158,7 @@ def divergence_real(args: dict, evidence: dict) -> CriterioResult:
         "divergência REAL — não cosmética — entre os relatórios.\n\n"
         "Divergência real: A1 e A2 chegam a conclusões diferentes sobre o "
         "mesmo fato verificável (ex: existência de um ator, taxa de uso, "
-        "natureza humana vs IA de um componente).\n\n"
+        "papel ou categoria de um componente).\n\n"
         "Divergência cosmética (rejeitar): A1 usa bullet, A2 usa tabela; A1 "
         "lista 5 atores, A2 lista 6 mas são os mesmos; ordem de apresentação.\n\n"
         "Score:\n"
@@ -251,15 +251,25 @@ def actor_map_quality(args: dict, evidence: dict) -> CriterioResult:
     if entry_tx is None or not entry_tx.get("exists"):
         return _miss_artifact(peso, role_transcript)
 
+    # Tipagem (humanos/IA) é OPCIONAL — só entra no rubric se o YAML pedir.
+    # Permite reuso da primitive em exercícios que não exigem tipologia
+    # humano/IA. Default (min_humans=min_ai=0): mapa avaliado pelo total +
+    # consistência + decisões, sem cobrar categoria.
+    if min_humans > 0 or min_ai > 0:
+        typing_clause = f", ≥{min_humans} humanos, ≥{min_ai} IA"
+        contagem_note = "tipagem (humanos/IA) corretos"
+    else:
+        typing_clause = ""
+        contagem_note = "categorias coerentes"
     rubrica = (
-        f"Avalie 3 aspectos do mapa de atores (≥{min_actors} atores, "
-        f"≥{min_humans} humanos, ≥{min_ai} IA):\n"
-        "1. CONTAGEM: número e tipagem corretos.\n"
+        f"Avalie 3 aspectos do mapa de atores (≥{min_actors} atores"
+        f"{typing_clause}):\n"
+        f"1. CONTAGEM: número e {contagem_note}.\n"
         "2. CONSISTÊNCIA: todo ator no mapa aparece nominalmente no "
         "transcript do /grill-me (cross-reference).\n"
         "3. DECISÕES CITADAS: o mapa cita explicitamente ≥2 decisões "
         "tomadas durante o grill que motivaram categorização "
-        "(ex: 'classifiquei IVR como IA após pergunta 3').\n\n"
+        "(ex: 'classifiquei o fornecedor X como ator indireto após pergunta 3').\n\n"
         "Score = média dos 3 aspectos (cada um 0..1):\n"
         "- Aspecto 1: 1.0 se contagem bate exata; 0.5 se quase (off-by-one); "
         "0.0 se falha categoria mínima\n"
