@@ -369,3 +369,208 @@ def test_relations_explicit_partial_score(monkeypatch: pytest.MonkeyPatch):
     )
     assert r.passed is True
     assert r.points_earned == 4  # round(0.5 * 8) = 4
+
+
+# ---------- audit_finds_real_issues (B10 — cadeia de auditoria) ------------
+
+
+def test_audit_finds_real_issues_passes_with_high_score(monkeypatch: pytest.MonkeyPatch):
+    _stub_judge(
+        monkeypatch,
+        JudgeResult(score=1.0, evidence_quote="lacuna de evidência em §3", missing="", ok=True),
+    )
+    r = registry["judge.artifacts.audit_finds_real_issues"](
+        {"_peso": 8, "role_audit": "auditoria_v1", "role_audited": "assistente_v1"},
+        _ev(
+            _entry("auditoria_v1", content="AUDITORIA-CONTENT"),
+            _entry("assistente_v1", content="PESQUISA-CONTENT"),
+        ),
+    )
+    assert r.passed is True
+    assert r.points_earned == 8
+    assert r.degraded is False
+
+
+def test_audit_finds_real_issues_concatenates_audit_and_audited(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    capture: dict[str, Any] = {}
+    _stub_judge(monkeypatch, JudgeResult(0.9, "ok", "", True), capture)
+    registry["judge.artifacts.audit_finds_real_issues"](
+        {"_peso": 8, "role_audit": "auditoria_v1", "role_audited": "assistente_v1"},
+        _ev(
+            _entry("auditoria_v1", content="AUDIT-X"),
+            _entry("assistente_v1", content="PESQUISA-Y"),
+        ),
+    )
+    assert "AUDIT-X" in capture["content"]
+    assert "PESQUISA-Y" in capture["content"]
+    assert "=== AUDITORIA" in capture["content"]
+    assert "=== PESQUISA AUDITADA" in capture["content"]
+    assert "falha REAL" in capture["rubrica"]
+
+
+def test_audit_finds_real_issues_misses_when_audited_absent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def must_not_call(*a: Any, **k: Any) -> JudgeResult:
+        raise AssertionError("não deve chamar judge sem ambos artefatos")
+
+    monkeypatch.setattr(judge_llm, "grade_artifact", must_not_call)
+    r = registry["judge.artifacts.audit_finds_real_issues"](
+        {"_peso": 8, "role_audit": "auditoria_v1", "role_audited": "assistente_v1"},
+        _ev(_entry("auditoria_v1", content="x")),  # assistente_v1 ausente
+    )
+    assert r.passed is False
+    assert "assistente_v1" in r.message
+
+
+# ---------- iteration_addresses_audit (B11 — cadeia de auditoria) ----------
+
+
+def test_iteration_addresses_audit_passes(monkeypatch: pytest.MonkeyPatch):
+    _stub_judge(
+        monkeypatch,
+        JudgeResult(score=0.8, evidence_quote="v2 §2 corrige fonte fraca", missing="", ok=True),
+    )
+    r = registry["judge.artifacts.iteration_addresses_audit"](
+        {"_peso": 6, "role_iteration": "assistente_v2", "role_audit": "auditoria_v1"},
+        _ev(
+            _entry("assistente_v2", content="V2-CONTENT"),
+            _entry("auditoria_v1", content="AUDIT1-CONTENT"),
+        ),
+    )
+    assert r.passed is True
+    assert r.points_earned == 5  # round(0.8 * 6)
+
+
+def test_iteration_addresses_audit_misses_when_audit_absent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def must_not_call(*a: Any, **k: Any) -> JudgeResult:
+        raise AssertionError("não deve chamar judge sem ambos artefatos")
+
+    monkeypatch.setattr(judge_llm, "grade_artifact", must_not_call)
+    r = registry["judge.artifacts.iteration_addresses_audit"](
+        {"_peso": 6, "role_iteration": "assistente_v2", "role_audit": "auditoria_v1"},
+        _ev(_entry("assistente_v2", content="x")),  # auditoria_v1 ausente
+    )
+    assert r.passed is False
+    assert "auditoria_v1" in r.message
+
+
+def test_iteration_addresses_audit_concatenates(monkeypatch: pytest.MonkeyPatch):
+    capture: dict[str, Any] = {}
+    _stub_judge(monkeypatch, JudgeResult(1.0, "ok", "", True), capture)
+    registry["judge.artifacts.iteration_addresses_audit"](
+        {"_peso": 6, "role_iteration": "assistente_v2", "role_audit": "auditoria_v1"},
+        _ev(
+            _entry("assistente_v2", content="V2-X"),
+            _entry("auditoria_v1", content="A1-Y"),
+        ),
+    )
+    assert "V2-X" in capture["content"]
+    assert "A1-Y" in capture["content"]
+    assert "=== ITERAÇÃO" in capture["content"]
+    assert "=== AUDITORIA A SER ABORDADA" in capture["content"]
+
+
+# ---------- iteration_substantive_evolution (B12 — cadeia de auditoria) ----
+
+
+def test_iteration_substantive_evolution_passes(monkeypatch: pytest.MonkeyPatch):
+    _stub_judge(
+        monkeypatch,
+        JudgeResult(score=1.0, evidence_quote="v3 cita audit_v2 §3", missing="", ok=True),
+    )
+    r = registry["judge.artifacts.iteration_substantive_evolution"](
+        {
+            "_peso": 6,
+            "role_after": "assistente_v3",
+            "role_before": "assistente_v2",
+            "role_trigger": "auditoria_v2",
+        },
+        _ev(
+            _entry("assistente_v3", content="V3-X"),
+            _entry("assistente_v2", content="V2-X"),
+            _entry("auditoria_v2", content="A2-X"),
+        ),
+    )
+    assert r.passed is True
+    assert r.points_earned == 6
+
+
+def test_iteration_substantive_evolution_misses_when_trigger_absent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def must_not_call(*a: Any, **k: Any) -> JudgeResult:
+        raise AssertionError("não deve chamar judge sem os 3 artefatos")
+
+    monkeypatch.setattr(judge_llm, "grade_artifact", must_not_call)
+    r = registry["judge.artifacts.iteration_substantive_evolution"](
+        {
+            "_peso": 6,
+            "role_after": "assistente_v3",
+            "role_before": "assistente_v2",
+            "role_trigger": "auditoria_v2",
+        },
+        _ev(
+            _entry("assistente_v3", content="x"),
+            _entry("assistente_v2", content="y"),
+            # auditoria_v2 ausente
+        ),
+    )
+    assert r.passed is False
+    assert "auditoria_v2" in r.message
+
+
+def test_iteration_substantive_evolution_concatenates_three(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    capture: dict[str, Any] = {}
+    _stub_judge(monkeypatch, JudgeResult(0.7, "ok", "", True), capture)
+    registry["judge.artifacts.iteration_substantive_evolution"](
+        {
+            "_peso": 6,
+            "role_after": "assistente_v3",
+            "role_before": "assistente_v2",
+            "role_trigger": "auditoria_v2",
+        },
+        _ev(
+            _entry("assistente_v3", content="NOVO-V3"),
+            _entry("assistente_v2", content="ANTERIOR-V2"),
+            _entry("auditoria_v2", content="GATILHO-A2"),
+        ),
+    )
+    c = capture["content"]
+    assert "NOVO-V3" in c and "ANTERIOR-V2" in c and "GATILHO-A2" in c
+    assert "=== ITERAÇÃO ANTERIOR" in c
+    assert "=== AUDITORIA (GATILHO)" in c
+    assert "=== NOVA ITERAÇÃO" in c
+
+
+def test_iteration_substantive_evolution_fallback_marks_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _stub_judge(
+        monkeypatch,
+        JudgeResult(score=1.0, evidence_quote="", missing="HTTP 500", ok=False),
+    )
+    r = registry["judge.artifacts.iteration_substantive_evolution"](
+        {
+            "_peso": 6,
+            "role_after": "assistente_v3",
+            "role_before": "assistente_v2",
+            "role_trigger": "auditoria_v2",
+        },
+        _ev(
+            _entry("assistente_v3", content="x"),
+            _entry("assistente_v2", content="y"),
+            _entry("auditoria_v2", content="z"),
+        ),
+    )
+    # Fallback: nota máxima provisória + degraded=True
+    assert r.passed is True
+    assert r.points_earned == 6
+    assert r.degraded is True
+    assert "fallback" in r.message.lower()
