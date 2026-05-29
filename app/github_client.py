@@ -184,6 +184,11 @@ class GitHubClient:
         except GithubException as exc:
             if exc.status == 404:
                 return empty
+            if exc.status == 409:
+                # "Git Repository is empty" — repo existe mas sem commits.
+                # Evidencia vazia com repo_exists=True; a rubrica penaliza
+                # ausencia de commits/arquivos normalmente (nao e' falha de infra).
+                return {**empty, "repo_exists": True, "repo_public": not repo.private}
             raise GitHubAPIError(exc.status, _msg_from_github_exc(exc)) from exc
 
         prs_merged = [p for p in prs_closed if p["merged_at"] is not None]

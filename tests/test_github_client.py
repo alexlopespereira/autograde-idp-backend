@@ -294,6 +294,42 @@ def test_collect_evidence_returns_empty_on_404(
 
 
 @responses.activate
+def test_collect_evidence_empty_repo_409(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repo existe mas sem commits: GitHub responde 409 'Git Repository is
+    empty.' em /commits. Deve virar evidencia vazia com repo_exists=True,
+    nao GitHubAPIError (que viraria 502 github_unavailable)."""
+    monkeypatch.delenv(GITHUB_PAT_ENV, raising=False)
+    responses.add(
+        responses.GET,
+        _re("/repos/alice/repo1"),
+        json=_repo_payload(private=False),
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        _re("/repos/alice/repo1/commits"),
+        json={"message": "Git Repository is empty."},
+        status=409,
+    )
+
+    client = GitHubClient()
+    evidence = client.collect_evidence("https://github.com/alice/repo1")
+    assert evidence == {
+        "owner_repo": "alice/repo1",
+        "repo_exists": True,
+        "repo_public": True,
+        "files_list": [],
+        "file_sizes": {},
+        "commits": [],
+        "branches": [],
+        "prs_open": [],
+        "prs_merged": [],
+    }
+
+
+@responses.activate
 def test_non_404_4xx_raises_github_api_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
