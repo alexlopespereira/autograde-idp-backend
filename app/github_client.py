@@ -14,7 +14,7 @@ from github.GithubException import RateLimitExceededException
 log = logging.getLogger(__name__)
 
 GITHUB_PAT_ENV = "GITHUB_PAT"
-MAX_RATE_LIMIT_RETRIES = 2
+MAX_RATE_LIMIT_RETRIES = 10
 MAX_COMMITS_COLLECTED = 50
 
 
