@@ -30,18 +30,29 @@ CLI 155/155; ruff limpo nos dois.
 **Estado prático:**
 - CLI (paliativo) já está **ativo** onde o `autograde` é install editable apontando
   pro working tree em `main` — então `validar` já aguenta os ~40–90s.
-- Backend (cura de raiz) está em `main` mas **NÃO deployado** → prod ainda roda
-  judges em série.
+- Backend (cura de raiz) **DEPLOYADO em 2026-05-30** → prod já roda judges em paralelo.
 
-## 3. TAREFA PENDENTE — deploy do backend no Cloud Run
+## 3. ~~TAREFA PENDENTE~~ — deploy CONCLUÍDO ✅
 
-Sem o deploy, o backend em produção continua sequencial (mitigado só pelo timeout
-maior do cliente). Para publicar a paralelização:
+> **Feito em 2026-05-30.** Build Cloud Build `d8b6b5b6` (SUCCESS, 2m33s),
+> imagem `gcr.io/autograde-314802/autograde-backend:c56043e`, revisão
+> **`autograde-backend-00024-2tb`** servindo 100% do tráfego. Não precisa
+> re-deployar; comando abaixo fica como referência para o próximo deploy.
+
+> ⚠️ **Gotcha de deploy manual (aprendido nesta sessão):** o `cloudbuild.yaml`
+> tagueia a imagem com `$SHORT_SHA`, que **só é populado em builds por trigger**.
+> Em `gcloud builds submit` manual o `SHORT_SHA` vem vazio → erro
+> `invalid image name "...:"`. **Solução:** passe `SHORT_SHA=$(git rev-parse
+> --short HEAD)` junto nas `--substitutions` (gcloud aceita). Já incluído no
+> comando abaixo.
+
+Para publicar a paralelização (ou um deploy futuro):
 
 ```bash
 cd autograde-idp-backend           # já em main com aecdac2
-gcloud builds submit --config=cloudbuild.yaml \
+gcloud builds submit --config=cloudbuild.yaml --project=autograde-314802 \
   --substitutions=\
+SHORT_SHA=$(git rev-parse --short HEAD),\
 _GOOGLE_OAUTH_CLIENT_ID=<...>,\
 _ROSTER_URL=<...>,\
 _SHEET_ID=<...>,\
