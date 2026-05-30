@@ -1,3 +1,5 @@
+import threading
+import time
 from datetime import datetime
 
 from app.curriculum import Criterio, Exercise
@@ -132,3 +134,60 @@ def test_github_primitives_handle_empty_evidence():
     assert result.passed is False
     assert result.points_earned == 0
     assert result.points_max == 10
+
+
+def test_grade_runs_primitives_concurrently():
+    """Judges I/O-bound rodam em paralelo: 3 primitives que esperam um Barrier
+    de 3 só liberam se executados simultaneamente. Sequencial → BrokenBarrier.
+    """
+    n = 3
+    barrier = threading.Barrier(n, timeout=5)
+    reached: list[int] = []
+    lock = threading.Lock()
+
+    @register("test.barrier")
+    def _barrier(args: dict, evidence: dict) -> CriterioResult:
+        peso = int(args.get("_peso", 0))
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            return CriterioResult(False, 0, peso, "barrier timeout (rodou sequencial)")
+        with lock:
+            reached.append(peso)
+        return CriterioResult(True, peso, peso, "concorrente ok")
+
+    ex = _make_exercise(
+        tuple(Criterio(id=f"c{i}", peso=10, check="test.barrier", args={}) for i in range(n))
+    )
+
+    bulletin = grade(ex, evidence={})
+
+    assert len(reached) == n, "primitives não rodaram em paralelo (barrier não fechou)"
+    assert all(c.passed for c in bulletin.criterios)
+    assert bulletin.total == 30
+
+
+def test_grade_preserves_order_despite_completion_race():
+    """Ordem do boletim segue a ordem dos criterios, não a ordem de término.
+    O de menor peso dorme mais → termina por último, mas deve sair primeiro.
+    """
+
+    @register("test.sleep_inverse")
+    def _sleep_inverse(args: dict, evidence: dict) -> CriterioResult:
+        peso = int(args.get("_peso", 0))
+        time.sleep((40 - peso) / 1000.0)  # peso menor dorme mais
+        return CriterioResult(True, peso, peso, f"p{peso}")
+
+    ex = _make_exercise(
+        (
+            Criterio(id="a", peso=10, check="test.sleep_inverse", args={}),
+            Criterio(id="b", peso=20, check="test.sleep_inverse", args={}),
+            Criterio(id="c", peso=30, check="test.sleep_inverse", args={}),
+        )
+    )
+
+    bulletin = grade(ex, evidence={})
+
+    assert [c.points_max for c in bulletin.criterios] == [10, 20, 30]
+    assert [c.message for c in bulletin.criterios] == ["p10", "p20", "p30"]
+    assert bulletin.total == 60
