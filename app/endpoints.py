@@ -54,7 +54,7 @@ class SubmissionRequestBody(GradeRequestBody):
     submission_uuid: str
 
 
-RATE_LIMIT_DAILY_CAP = 3  # tanto pra preview-com-respostas quanto pra submissions
+RATE_LIMIT_DAILY_CAP = 10  # tanto pra preview-com-respostas quanto pra submissions
 RATE_LIMIT_COOLDOWN_SECONDS = 30
 # Reset do cap é à meia-noite local (Brasil) — pedagogicamente intuitivo.
 RATE_LIMIT_TIMEZONE = "America/Sao_Paulo"
