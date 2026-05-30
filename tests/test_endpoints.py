@@ -791,11 +791,12 @@ async def test_submissions_rate_limit_cooldown(patches, monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_submissions_rate_limit_daily_cap(patches, monkeypatch) -> None:
-    # 10 submissions nas últimas 24h (no limite)
+    # Excede o cap: cap+1 submissions hoje (BRT), todas > 30s atrás (passa
+    # cooldown) e no mesmo dia local. Minutos pra não cruzar a meia-noite BRT.
+    n = endpoints_module.RATE_LIMIT_DAILY_CAP + 1
     rows = [["header"] * 18]
-    for i in range(10):
-        # cada uma > 30s atrás (passa cooldown) mas < 24h (conta no cap)
-        ts = (NOW - timedelta(hours=i + 1)).isoformat()
+    for i in range(n):
+        ts = (NOW - timedelta(minutes=i + 1)).isoformat()
         rows.append([ts, f"uuid-{i}", EMAIL, "Aluno", "TD-2026-01", "1.1", "60", "100"] + [""] * 10)
     sheets = FakeSheets(
         append_result=AppendResult(
@@ -957,11 +958,12 @@ async def test_grade_preview_rate_limit_cooldown(patches, monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_grade_preview_rate_limit_daily_cap(patches, monkeypatch) -> None:
-    # 3 previews mesma data local (BRT), todas > 30s atrás (passa cooldown).
-    # NOW = 2026-05-10 12:00 UTC = 2026-05-10 09:00 BRT.
+    # Excede o cap: cap+1 previews mesma data local (BRT), todas > 30s atrás.
+    # NOW = 2026-05-10 12:00 UTC = 2026-05-10 09:00 BRT. Minutos pra ficar no dia.
+    n = endpoints_module.RATE_LIMIT_DAILY_CAP + 1
     rows = [["header"] * 3]
-    for hours_ago in (1, 2, 3):  # 8h, 7h, 6h BRT — todas em 2026-05-10
-        ts = (NOW - timedelta(hours=hours_ago)).isoformat()
+    for minutes_ago in range(1, n + 1):
+        ts = (NOW - timedelta(minutes=minutes_ago)).isoformat()
         rows.append([ts, EMAIL, "1.1"])
     sheets = FakeSheets(previews_rows=rows)
     _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=1), sheets=sheets)
