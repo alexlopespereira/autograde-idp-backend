@@ -99,26 +99,6 @@ def test_word_count_fails_when_artifact_absent():
     assert r.passed is False
 
 
-# ---------- evidence.artifacts.links_min ------------------------------------
-
-
-def test_links_min_passes_when_enough_links():
-    r = registry["evidence.artifacts.links_min"](
-        {"_peso": 4, "role": "report_ai_1", "min": 3},
-        _evidence(_make_entry("report_ai_1", links=["a", "b", "c", "d"])),
-    )
-    assert r.passed is True
-
-
-def test_links_min_fails_when_insufficient():
-    r = registry["evidence.artifacts.links_min"](
-        {"_peso": 4, "role": "report_ai_1", "min": 3},
-        _evidence(_make_entry("report_ai_1", links=["a", "b"])),
-    )
-    assert r.passed is False
-    assert "2" in r.message and "3" in r.message
-
-
 # ---------- evidence.artifacts.distinct_reports -----------------------------
 
 
@@ -301,7 +281,6 @@ def test_all_primitives_handle_missing_artifacts_key_gracefully():
     for name in [
         "evidence.artifacts.exists",
         "evidence.artifacts.word_count_min",
-        "evidence.artifacts.links_min",
         "evidence.artifacts.heading_pattern_min",
     ]:
         r = registry[name](

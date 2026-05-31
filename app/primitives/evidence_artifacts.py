@@ -88,26 +88,6 @@ def word_count_min(args: dict, evidence: dict) -> CriterioResult:
     )
 
 
-@register("evidence.artifacts.links_min")
-def links_min(args: dict, evidence: dict) -> CriterioResult:
-    peso = _peso(args)
-    role = _str_arg(args, "role")
-    min_links = _int_arg(args, "min")
-    entry = _artifact_by_role(evidence, role)
-    if entry is None or not entry.get("exists"):
-        return CriterioResult(False, 0, peso, f"artefato {role!r} ausente")
-    links = entry.get("links") or []
-    n = len(links) if isinstance(links, list) else 0
-    if n >= min_links:
-        return CriterioResult(True, peso, peso, f"{n} URLs distintas (mínimo {min_links})")
-    return CriterioResult(
-        False,
-        0,
-        peso,
-        f"{n} URLs é menos que o mínimo de {min_links} para {role!r}",
-    )
-
-
 @register("evidence.artifacts.distinct_reports")
 def distinct_reports(args: dict, evidence: dict) -> CriterioResult:
     """Garante que ≥2 relatórios são distintos (sha256 + primeiros 500 chars).
