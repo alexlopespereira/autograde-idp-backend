@@ -1,6 +1,6 @@
 """Gemini API client para gradear respostas subjetivas de exercícios.
 
-Chama `generateContent` no `gemini-2.5-flash` com structured output (JSON
+Chama `generateContent` no `gemini-2.5-flash-lite` com structured output (JSON
 schema) pra retornar `{nota: int, feedback: str}`. Fallback em caso de
 qualquer falha: nota máxima + flag `ok=False` pra log. Decisão: não punir
 aluno por bug nosso (princípio: falha do grader → benefício da dúvida).
@@ -21,7 +21,7 @@ import requests
 
 log = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 GEMINI_API_URL = (
     f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 )
