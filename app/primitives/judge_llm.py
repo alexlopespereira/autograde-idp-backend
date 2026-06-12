@@ -466,3 +466,144 @@ def iteration_addresses_audit(args: dict, evidence: dict) -> CriterioResult:
     }
     label = f"{role_iteration}+{role_audit}"
     return _materialize(peso, label, _call_judge(rubrica, label, combined_entry))
+
+
+def _concat_entry(
+    *parts: tuple[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Concatena ≥2 artefatos num único entry pro judge (mapa + transcript etc.).
+
+    Cada ``part`` é ``(label, entry)``; o conteúdo vira blocos delimitados por
+    ``=== <label> (<role>) ===`` e os metadados (headings/word_count/links) são
+    somados. Mesmo padrão usado por actor_map_quality / audit_finds_real_issues.
+    """
+    blocks: list[str] = []
+    headings: list[str] = []
+    links: list[str] = []
+    word_count = 0
+    for label, entry in parts:
+        blocks.append(f"=== {label} ===\n{entry.get('content', '')}\n")
+        headings += list(entry.get("headings") or [])
+        links += list(entry.get("links") or [])
+        word_count += _int_arg(entry, "word_count")
+    return {
+        "content": "\n".join(blocks),
+        "headings": headings,
+        "links": links,
+        "word_count": word_count,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Primitive: blueprint_quality (3.1 Parte C — Service Blueprint As-Is)
+# ---------------------------------------------------------------------------
+
+
+@register("judge.artifacts.blueprint_quality")
+def blueprint_quality(args: dict, evidence: dict) -> CriterioResult:
+    """Avalia um Service Blueprint As-Is (camadas + linhas + fail points).
+
+    Recebe BLUEPRINT + TRANSCRIPT do /grill-me concatenados, pra cruzar os
+    elementos do blueprint com a sessão que os destilou (mesma lógica de
+    consistência do actor_map_quality, retargetada pro framework de Shostack
+    das 5 swim lanes apresentado na Aula 3).
+    """
+    peso = _peso(args)
+    role_map = _str_arg(args, "role_map", "blueprint_asis")
+    role_transcript = _str_arg(args, "role_transcript", "grill_transcript")
+    min_steps = _int_arg(args, "min_steps", 5)
+    entry_map = _artifact_by_role(evidence, role_map)
+    entry_tx = _artifact_by_role(evidence, role_transcript)
+    if entry_map is None or not entry_map.get("exists"):
+        return _miss_artifact(peso, role_map)
+    if entry_tx is None or not entry_tx.get("exists"):
+        return _miss_artifact(peso, role_transcript)
+    rubrica = (
+        "Avalie a qualidade de um SERVICE BLUEPRINT (As-Is) de um serviço "
+        "público, no modelo de G. Lynn Shostack apresentado na Aula 3. "
+        "Avalie 3 aspectos:\n\n"
+        "1. CAMADAS (swim lanes): o blueprint distingue, de forma identificável, "
+        "as faixas horizontais — Evidências Físicas, Ações do Cidadão/Usuário, "
+        "Frontstage (linha de frente visível: humanos e/ou tecnologia visível), "
+        "Backstage (bastidores invisíveis) e Processos de Suporte/retaguarda. "
+        "Aceitar tabela, matriz ou mermaid desde que as faixas sejam "
+        "distinguíveis. Aceita-se ao menos as linhas divisórias críticas "
+        "(interação, visibilidade) implícitas na separação Frontstage/Backstage.\n"
+        f"2. JORNADA: há ≥{min_steps} etapas SEQUENCIAIS mapeadas sob a ótica "
+        "de quem CONSOME o serviço (não de quem opera), do início ao fim.\n"
+        "3. DIAGNÓSTICO E CONSISTÊNCIA: o blueprint aponta ≥1 fail point / "
+        "gargalo / ponto de atrito concreto; E todo elemento central do "
+        "blueprint (etapas e atores citados) aparece nominalmente no "
+        "transcript do /grill-me fornecido (cross-reference).\n\n"
+        "Score = média dos 3 aspectos (cada um 0..1):\n"
+        "- Aspecto 1: 1.0 se ≥4 das 5 camadas presentes e distinguíveis; "
+        "0.5 se só separa Frontstage/Backstage; 0.0 se é lista linear sem camadas\n"
+        f"- Aspecto 2: 1.0 se ≥{min_steps} etapas na ótica do cidadão; "
+        "0.5 se poucas OU ótica do operador; 0.0 se não há jornada\n"
+        "- Aspecto 3: 1.0 se ≥1 fail point E consistência total com o "
+        "transcript; 0.5 se um dos dois; 0.0 se nenhum"
+    )
+    combined_entry = _concat_entry(
+        (f"BLUEPRINT ({role_map})", entry_map),
+        (f"TRANSCRIPT ({role_transcript})", entry_tx),
+    )
+    label = f"{role_map}+{role_transcript}"
+    return _materialize(peso, label, _call_judge(rubrica, label, combined_entry))
+
+
+# ---------------------------------------------------------------------------
+# Primitive: tobe_improvements (3.1 Parte C — Service Blueprint To-Be)
+# ---------------------------------------------------------------------------
+
+
+@register("judge.artifacts.tobe_improvements")
+def tobe_improvements(args: dict, evidence: dict) -> CriterioResult:
+    """Avalia o Blueprint To-Be como reengenharia CONCRETA do As-Is.
+
+    Recebe TO-BE + AS-IS concatenados: o judge precisa dos dois pra confirmar
+    que as melhorias são deltas reais (e não um To-Be genérico desacoplado do
+    diagnóstico). Cobre os 3 eixos da Aula 3: plataformas gov.br, redução de
+    redundância/atrito e Desenho Universal / Linguagem Simples.
+    """
+    peso = _peso(args)
+    role_tobe = _str_arg(args, "role_tobe", "blueprint_tobe")
+    role_asis = _str_arg(args, "role_asis", "blueprint_asis")
+    min_plataformas = _int_arg(args, "min_plataformas", 2)
+    entry_tobe = _artifact_by_role(evidence, role_tobe)
+    entry_asis = _artifact_by_role(evidence, role_asis)
+    if entry_tobe is None or not entry_tobe.get("exists"):
+        return _miss_artifact(peso, role_tobe)
+    if entry_asis is None or not entry_asis.get("exists"):
+        return _miss_artifact(peso, role_asis)
+    rubrica = (
+        "Avalie um SERVICE BLUEPRINT To-Be (serviço público futuro otimizado) "
+        "como reengenharia CONCRETA do blueprint As-Is fornecido junto. "
+        "Avalie 3 aspectos:\n\n"
+        f"1. PLATAFORMAS gov.br: o To-Be emprega ≥{min_plataformas} recursos/"
+        "plataformas concretos do ecossistema federal, ligados a etapas "
+        "específicas do blueprint — ex.: Login/Conta gov.br (e nível "
+        "Bronze/Prata/Ouro), CIN, APIs do Conecta.gov.br, Notifica gov.br, "
+        "assinatura digital de documentos, PagTesouro, Design System gov.br. "
+        "Citar o nome sem ligar a uma etapa NÃO conta.\n"
+        "2. REDUÇÃO DE REDUNDÂNCIA/ATRITO: o To-Be elimina ≥1 etapa onerosa "
+        "presente no As-Is (ex.: 'anexar cópia de documento', verificação "
+        "manual, repetir CPF, recontar a história) e o delta é rastreável "
+        "contra o As-Is — fica claro O QUE saiu/mudou e POR QUÊ.\n"
+        "3. DESENHO UNIVERSAL / LINGUAGEM SIMPLES: o To-Be aplica ≥1 diretriz "
+        "de acessibilidade ou Linguagem Simples acima da linha de visibilidade "
+        "(frontstage universal e acessível) — não transfere complexidade "
+        "organizacional para o cidadão.\n\n"
+        "Score = média dos 3 aspectos (cada um 0..1):\n"
+        f"- Aspecto 1: 1.0 se ≥{min_plataformas} plataformas ligadas a etapas; "
+        "0.5 se 1 ou citadas sem ligação; 0.0 se nenhuma\n"
+        "- Aspecto 2: 1.0 se ≥1 redundância eliminada com delta rastreável; "
+        "0.5 se melhoria vaga sem rastrear o As-Is; 0.0 se To-Be ≈ As-Is\n"
+        "- Aspecto 3: 1.0 se diretriz concreta de acessibilidade/Linguagem "
+        "Simples; 0.5 se mencionada genericamente; 0.0 se ausente"
+    )
+    combined_entry = _concat_entry(
+        (f"TO-BE ({role_tobe})", entry_tobe),
+        (f"AS-IS ({role_asis})", entry_asis),
+    )
+    label = f"{role_tobe}+{role_asis}"
+    return _materialize(peso, label, _call_judge(rubrica, label, combined_entry))

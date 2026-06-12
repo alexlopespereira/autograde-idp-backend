@@ -473,3 +473,102 @@ def test_iteration_addresses_audit_concatenates(monkeypatch: pytest.MonkeyPatch)
     assert "A1-Y" in capture["content"]
     assert "=== ITERAÇÃO" in capture["content"]
     assert "=== AUDITORIA A SER ABORDADA" in capture["content"]
+
+
+# ---------- blueprint_quality (3.1 As-Is) ----------------------------------
+
+
+def test_blueprint_quality_concatenates_blueprint_and_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    capture: dict[str, Any] = {}
+    _stub_judge(monkeypatch, JudgeResult(0.8, "5 camadas ok", "", True), capture)
+    r = registry["judge.artifacts.blueprint_quality"](
+        {
+            "_peso": 16,
+            "role_map": "blueprint_asis",
+            "role_transcript": "grill_transcript",
+            "min_steps": 5,
+        },
+        _ev(
+            _entry("blueprint_asis", content="BLUEPRINT-CONTEUDO"),
+            _entry("grill_transcript", content="TRANSCRIPT-CONTEUDO"),
+        ),
+    )
+    assert r.passed is True
+    assert r.points_earned == int(round(0.8 * 16))
+    # concatena blueprint + transcript com delimitadores
+    assert "BLUEPRINT-CONTEUDO" in capture["content"]
+    assert "TRANSCRIPT-CONTEUDO" in capture["content"]
+    assert "=== BLUEPRINT (blueprint_asis)" in capture["content"]
+    assert "=== TRANSCRIPT (grill_transcript)" in capture["content"]
+    # rubrica cobra camadas, jornada mínima e fail point + consistência
+    rub = capture["rubrica"]
+    assert "CAMADAS" in rub
+    assert "Frontstage" in rub and "Backstage" in rub
+    assert "5" in rub  # min_steps
+    assert "fail point" in rub
+    assert "cross-reference" in rub
+
+
+def test_blueprint_quality_misses_when_transcript_absent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def must_not_call(*a: Any, **k: Any) -> JudgeResult:
+        raise AssertionError("não deve chamar judge sem ambos artefatos")
+
+    monkeypatch.setattr(judge_llm, "grade_artifact", must_not_call)
+    r = registry["judge.artifacts.blueprint_quality"](
+        {"_peso": 16, "role_map": "blueprint_asis", "role_transcript": "grill_transcript"},
+        _ev(_entry("blueprint_asis", content="x")),  # transcript ausente
+    )
+    assert r.passed is False
+    assert "grill_transcript" in r.message
+
+
+# ---------- tobe_improvements (3.1 To-Be) ----------------------------------
+
+
+def test_tobe_improvements_concatenates_tobe_and_asis(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    capture: dict[str, Any] = {}
+    _stub_judge(monkeypatch, JudgeResult(1.0, "govbr aplicado", "", True), capture)
+    r = registry["judge.artifacts.tobe_improvements"](
+        {
+            "_peso": 16,
+            "role_tobe": "blueprint_tobe",
+            "role_asis": "blueprint_asis",
+            "min_plataformas": 2,
+        },
+        _ev(
+            _entry("blueprint_tobe", content="TOBE-X"),
+            _entry("blueprint_asis", content="ASIS-Y"),
+        ),
+    )
+    assert r.passed is True
+    assert r.points_earned == 16
+    assert "TOBE-X" in capture["content"]
+    assert "ASIS-Y" in capture["content"]
+    assert "=== TO-BE (blueprint_tobe)" in capture["content"]
+    assert "=== AS-IS (blueprint_asis)" in capture["content"]
+    rub = capture["rubrica"]
+    assert "PLATAFORMAS gov.br" in rub
+    assert "REDUÇÃO DE REDUNDÂNCIA" in rub
+    assert "LINGUAGEM SIMPLES" in rub
+    assert "2" in rub  # min_plataformas
+
+
+def test_tobe_improvements_misses_when_asis_absent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def must_not_call(*a: Any, **k: Any) -> JudgeResult:
+        raise AssertionError("não deve chamar judge sem ambos artefatos")
+
+    monkeypatch.setattr(judge_llm, "grade_artifact", must_not_call)
+    r = registry["judge.artifacts.tobe_improvements"](
+        {"_peso": 16, "role_tobe": "blueprint_tobe", "role_asis": "blueprint_asis"},
+        _ev(_entry("blueprint_tobe", content="x")),  # as-is ausente
+    )
+    assert r.passed is False
+    assert "blueprint_asis" in r.message
