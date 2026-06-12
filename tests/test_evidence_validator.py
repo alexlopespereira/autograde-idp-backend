@@ -268,3 +268,88 @@ def test_gh_repo_view_malformed_json_yields_none():
         payload, _ex(), expected_github_user="fulano", submitted_at=NOW
     )
     assert ctx.gh_repo_view is None
+
+
+# ---------- 4.1 / 4.2 commands map (execução real HTTP/MCP) -------------------
+
+_CURL_POST_JOINED = (
+    "curl -s -X POST http://localhost:8000/tarefas "
+    "-H Content-Type: application/json "
+    '-d {"titulo":"estudar APIs"}'
+)
+
+
+def _scmd(cmd_joined: str, stdout: str, extract: str, *, exit_code: int = 0) -> dict:
+    return {
+        "tool": "shell",
+        "cmd_joined": cmd_joined,
+        "exit_code": exit_code,
+        "stdout": stdout,
+        "extract": extract,
+        "captured_at": NOW.isoformat(),
+    }
+
+
+def test_4_1_curl_commands_populate_commands_map():
+    payload = [
+        _scmd("curl -s http://localhost:8000/health", '{"status":"ok"}', "health"),
+        _scmd(
+            _CURL_POST_JOINED,
+            '{"id":1,"titulo":"estudar APIs","concluida":false}',
+            "post_tarefa",
+        ),
+    ]
+    ctx = validate_shell_evidence(
+        payload, _ex("4.1"), expected_github_user="fulano", submitted_at=NOW
+    )
+    ev = ctx.to_evidence_dict()
+    assert "commands" in ev
+    assert ev["commands"]["health"]["json"] == {"status": "ok"}
+    assert ev["commands"]["post_tarefa"]["json"]["id"] == 1
+    assert ev["commands"]["post_tarefa"]["exit_code"] == 0
+
+
+def test_4_1_non_json_stdout_yields_json_none():
+    payload = [
+        _scmd(
+            "curl -s http://localhost:8000/health",
+            "curl: (7) Failed to connect",
+            "health",
+            exit_code=7,
+        )
+    ]
+    ctx = validate_shell_evidence(
+        payload, _ex("4.1"), expected_github_user="fulano", submitted_at=NOW
+    )
+    assert ctx.to_evidence_dict()["commands"]["health"]["json"] is None
+
+
+def test_4_1_forged_command_outside_whitelist_rejected():
+    payload = [_scmd("curl -s http://evil.example/steal", "{}", "health")]
+    with pytest.raises(InvalidShellEvidence, match="fora do whitelist"):
+        validate_shell_evidence(
+            payload, _ex("4.1"), expected_github_user="fulano", submitted_at=NOW
+        )
+
+
+def test_4_2_python_client_command_accepted_and_parsed():
+    envelope = (
+        '{"tools":["criar_tarefa","listar_tarefas"],'
+        '"criar_resultado":{"id":1,"titulo":"tarefa via mcp","concluida":false},'
+        '"listar_resultado":[{"id":1,"titulo":"tarefa via mcp","concluida":false}]}'
+    )
+    payload = [_scmd("python cliente_teste.py", envelope, "mcp_test")]
+    ctx = validate_shell_evidence(
+        payload, _ex("4.2"), expected_github_user="fulano", submitted_at=NOW
+    )
+    cmds = ctx.to_evidence_dict()["commands"]
+    assert cmds["mcp_test"]["json"]["tools"] == ["criar_tarefa", "listar_tarefas"]
+    assert cmds["mcp_test"]["json"]["criar_resultado"]["id"] == 1
+
+
+def test_4_2_forged_python_command_rejected():
+    payload = [_scmd("python evil.py", "{}", "mcp_test")]
+    with pytest.raises(InvalidShellEvidence, match="fora do whitelist"):
+        validate_shell_evidence(
+            payload, _ex("4.2"), expected_github_user="fulano", submitted_at=NOW
+        )

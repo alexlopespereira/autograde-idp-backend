@@ -30,6 +30,104 @@ def _shell_context(evidence: dict) -> dict[str, Any] | None:
     return None
 
 
+# Sentinel para distinguir "campo ausente" de "campo presente com valor falsy"
+# (ex.: ``concluida: false`` é presente; ``_dig`` retornaria ``False``, que não
+# pode ser confundido com ausência).
+_MISSING = object()
+
+
+def _dig(obj: Any, dotted: str) -> Any:
+    """Desce por um caminho pontilhado (``a.b.c``) em dicts aninhados.
+
+    Retorna :data:`_MISSING` se qualquer segmento não existir.
+    """
+    cur = obj
+    for part in dotted.split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return _MISSING
+    return cur
+
+
+def _command_entry(evidence: dict, extract: Any) -> dict | None:
+    ctx = _shell_context(evidence) or {}
+    commands = ctx.get("commands") or {}
+    entry = commands.get(extract)
+    return entry if isinstance(entry, dict) else None
+
+
+@register("evidence.shell.http_json_match")
+def http_json_match(args: dict, evidence: dict) -> CriterioResult:
+    """Valida o corpo JSON capturado de ``extract`` campo a campo.
+
+    ``equals`` é um mapa ``caminho_pontilhado -> valor_esperado``; ``present`` é
+    uma lista de caminhos que precisam existir (qualquer valor, inclusive
+    falsy). Caminhos aninhados via :func:`_dig`.
+    """
+    peso = _peso(args)
+    extract = args.get("extract")
+    entry = _command_entry(evidence, extract)
+    if entry is None:
+        return CriterioResult(False, 0, peso, f"comando {extract!r} nao capturado")
+    data = entry.get("json")
+    if data is None:
+        return CriterioResult(
+            False,
+            0,
+            peso,
+            f"resposta de {extract!r} nao e JSON valido (a API estava no ar?)",
+        )
+    for key, expected in (args.get("equals") or {}).items():
+        actual = _dig(data, str(key))
+        if actual != expected:
+            return CriterioResult(
+                False, 0, peso, f"{key}: esperado {expected!r}, veio {actual!r}"
+            )
+    for key in args.get("present") or []:
+        if _dig(data, str(key)) is _MISSING:
+            return CriterioResult(False, 0, peso, f"campo ausente: {key}")
+    return CriterioResult(True, peso, peso, "resposta JSON bate com o contrato")
+
+
+@register("evidence.shell.json_list_includes")
+def json_list_includes(args: dict, evidence: dict) -> CriterioResult:
+    """Verifica que a lista em ``field`` contem todos os itens de ``includes``."""
+    peso = _peso(args)
+    extract = args.get("extract")
+    entry = _command_entry(evidence, extract)
+    if entry is None or entry.get("json") is None:
+        return CriterioResult(False, 0, peso, f"{extract!r} sem JSON")
+    val = _dig(entry["json"], str(args.get("field", "")))
+    if not isinstance(val, list):
+        return CriterioResult(
+            False, 0, peso, f"campo {args.get('field')!r} nao e lista"
+        )
+    faltando = [x for x in (args.get("includes") or []) if x not in val]
+    if faltando:
+        return CriterioResult(False, 0, peso, f"faltam no campo: {faltando}")
+    return CriterioResult(True, peso, peso, f"lista contem {args.get('includes')}")
+
+
+@register("evidence.shell.json_list_min_len")
+def json_list_min_len(args: dict, evidence: dict) -> CriterioResult:
+    """Verifica que a lista em ``field`` tem pelo menos ``min`` itens."""
+    peso = _peso(args)
+    extract = args.get("extract")
+    entry = _command_entry(evidence, extract)
+    if entry is None or entry.get("json") is None:
+        return CriterioResult(False, 0, peso, f"{extract!r} sem JSON")
+    val = _dig(entry["json"], str(args.get("field", "")))
+    if not isinstance(val, list):
+        return CriterioResult(
+            False, 0, peso, f"campo {args.get('field')!r} nao e lista"
+        )
+    n = int(args.get("min", 1))
+    if len(val) < n:
+        return CriterioResult(False, 0, peso, f"lista tem {len(val)} (< {n})")
+    return CriterioResult(True, peso, peso, f"lista tem {len(val)} (>= {n})")
+
+
 @register("evidence.shell.gh_auth_ok")
 def gh_auth_ok(args: dict, evidence: dict) -> CriterioResult:
     peso = _peso(args)
