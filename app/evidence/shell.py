@@ -39,10 +39,34 @@ _GH_BASIC_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"(?:\s+--json\s+[A-Za-z]+(?:,[A-Za-z]+)*)?$"
     ),
 )
+# Exercício 4.1 — API REST de TODO list, avaliada por 4 curl com inputs FIXOS.
+# Os patterns são literais do cmd_joined que o CLI produz (" ".join(cmd)).
+_API_4_1_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^curl -s http://localhost:8000/health$"),
+    re.compile(
+        r"^curl -s -X POST http://localhost:8000/tarefas "
+        r"-H Content-Type: application/json "
+        r'-d \{"titulo":"estudar APIs"\}$'
+    ),
+    re.compile(r"^curl -s http://localhost:8000/tarefas/1$"),
+    re.compile(
+        r"^curl -s -X PUT http://localhost:8000/tarefas/1 "
+        r"-H Content-Type: application/json "
+        r'-d \{"titulo":"estudar APIs REST","concluida":true\}$'
+    ),
+)
+
+# Exercício 4.2 — MCP server local exercitado por um cliente de teste.
+_MCP_4_2_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^python cliente_teste\.py$"),
+)
+
 _WHITELIST: dict[str, tuple[re.Pattern[str], ...]] = {
     "1.2": _GH_BASIC_PATTERNS,
     "1.3": _GH_BASIC_PATTERNS,
     "1.4": _GH_BASIC_PATTERNS,
+    "4.1": _API_4_1_PATTERNS,
+    "4.2": _MCP_4_2_PATTERNS,
 }
 
 
@@ -61,6 +85,11 @@ class ShellEvidenceContext:
     gh_auth_user: str | None = None
     gh_repo_view: dict[str, Any] | None = None
     commands_seen: tuple[str, ...] = field(default_factory=tuple)
+    # Mapa genérico por ``extract``: commands[extract] =
+    # {"stdout": str, "exit_code": int|None, "json": <obj|None>}. Populado para
+    # qualquer comando rotulado com ``extract`` (HTTP do 4.1, MCP do 4.2, etc.),
+    # consumido pelas primitivas evidence.shell.http_json_match / json_list_*.
+    commands: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_evidence_dict(self) -> dict[str, Any]:
         return {
@@ -69,6 +98,7 @@ class ShellEvidenceContext:
             "gh_auth_user": self.gh_auth_user,
             "gh_repo_view": self.gh_repo_view,
             "commands_seen": list(self.commands_seen),
+            "commands": self.commands,
         }
 
 
@@ -108,6 +138,22 @@ def _extract_repo_view(stdout: str) -> dict[str, Any] | None:
     return parsed
 
 
+def _try_parse_json(stdout: str) -> Any:
+    """Parseia ``stdout`` como JSON; ``None`` se vazio ou inválido.
+
+    Usa try/except (não ``json.loads(...) or None``) para preservar valores
+    JSON falsy válidos como ``0`` ou ``[]`` e isolar "API fora do ar" (stdout
+    não-JSON) em ``json=None``.
+    """
+    text = (stdout or "").strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
 def validate_shell_evidence(
     evidence: Iterable[Any],
     exercise: Exercise,
@@ -132,6 +178,7 @@ def validate_shell_evidence(
     gh_auth_ok = False
     gh_repo_view: dict[str, Any] | None = None
     commands_seen: list[str] = []
+    commands: dict[str, dict[str, Any]] = {}
 
     for idx, raw in enumerate(items):
         if not isinstance(raw, dict):
@@ -171,6 +218,18 @@ def validate_shell_evidence(
 
         commands_seen.append(cmd_joined)
 
+        extract = raw.get("extract")
+        if isinstance(extract, str) and extract:
+            try:
+                exit_code: int | None = int(raw.get("exit_code", 0) or 0)
+            except (TypeError, ValueError):
+                exit_code = None
+            commands[extract] = {
+                "stdout": stdout,
+                "exit_code": exit_code,
+                "json": _try_parse_json(stdout),
+            }
+
         if cmd_joined == "gh --version":
             m = _GH_VERSION_RE.search(stdout)
             if m:
@@ -189,4 +248,5 @@ def validate_shell_evidence(
         gh_auth_user=gh_auth_user,
         gh_repo_view=gh_repo_view,
         commands_seen=tuple(commands_seen),
+        commands=commands,
     )
