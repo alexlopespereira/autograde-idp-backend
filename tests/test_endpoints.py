@@ -583,6 +583,204 @@ def _exercise_with_perguntas(num: int = 1) -> Exercise:
     )
 
 
+# ---------- Perguntas tipo:sql (prompt → SELECT → execução) ----------
+
+from app.curriculum import DatasetSql  # noqa: E402
+
+_SQL_SCHEMA = "CREATE TABLE contratos (id INTEGER, fornecedor TEXT, valor REAL);"
+_SQL_SEED = (
+    "INSERT INTO contratos VALUES "
+    "(1,'Alpha',100),(2,'Alpha',300),(3,'Beta',50);"  # Alpha total=400; média=200
+)
+_SQL_REF = "SELECT AVG(valor) FROM contratos WHERE fornecedor='Alpha'"
+
+
+def _exercise_with_sql(peso: int = 20) -> Exercise:
+    base = _make_exercise()
+    perguntas = (
+        Pergunta(
+            texto="Calcule a média de valor dos contratos do fornecedor que mais faturou.",
+            peso=peso,
+            tipo="sql",
+            query_referencia=_SQL_REF,
+        ),
+    )
+    return Exercise(
+        id=base.id,
+        titulo=base.titulo,
+        turmas=base.turmas,
+        disponivel_a_partir_de=base.disponivel_a_partir_de,
+        prazo=base.prazo,
+        criterios=base.criterios,
+        perguntas=perguntas,
+        dataset_sql=DatasetSql(schema=_SQL_SCHEMA, seed=_SQL_SEED),
+    )
+
+
+def _stub_generate_sql(monkeypatch, sql: str = "", *, ok: bool = True, error: str = ""):
+    from app.gemini import SqlGenResult
+
+    monkeypatch.setattr(
+        endpoints_module,
+        "generate_sql",
+        lambda pedido, schema, **_kw: SqlGenResult(sql=sql, ok=ok, error=error),
+    )
+
+
+def _sheets_ok() -> FakeSheets:
+    return FakeSheets(
+        append_result=AppendResult(
+            written=True, row_count_before=0, row_count_after=1, sheet_row_index=2
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_submissions_sql_correct_prompt_gets_full_marks(patches, monkeypatch) -> None:
+    sheets = _sheets_ok()
+    _patch_endpoints(patches, exercise=_exercise_with_sql(peso=20), sheets=sheets)
+    # prompt do aluno (irrelevante aqui) → LLM gera um SELECT correto, porém escrito
+    # de forma diferente da referência (mesmo resultado = 200)
+    _stub_generate_sql(
+        monkeypatch,
+        "SELECT AVG(valor) FROM contratos GROUP BY fornecedor "
+        "ORDER BY SUM(valor) DESC LIMIT 1",
+    )
+    response = await _post(
+        _make_app(),
+        "/submissions",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "submission_uuid": "uuid-sql-ok",
+            "respostas": ["média de venda do fornecedor que mais faturou"],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bulletin"]["total"] == 80  # 60 base + 20 sql
+    import json as _json
+
+    payload = _json.loads(sheets.appended_rows[0].respostas_json)
+    assert payload[0]["nota"] == 20
+    assert "✓" in payload[0]["feedback"]
+    assert body["bulletin"]["judge_degraded"] is False
+
+
+@pytest.mark.asyncio
+async def test_submissions_sql_wrong_result_gets_zero(patches, monkeypatch) -> None:
+    sheets = _sheets_ok()
+    _patch_endpoints(patches, exercise=_exercise_with_sql(peso=20), sheets=sheets)
+    _stub_generate_sql(monkeypatch, "SELECT SUM(valor) FROM contratos")  # 450 ≠ 200
+    response = await _post(
+        _make_app(),
+        "/submissions",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "submission_uuid": "uuid-sql-wrong",
+            "respostas": ["some tudo"],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["bulletin"]["total"] == 60  # só a base
+    import json as _json
+
+    payload = _json.loads(sheets.appended_rows[0].respostas_json)
+    assert payload[0]["nota"] == 0
+    assert "✗" in payload[0]["feedback"]
+
+
+@pytest.mark.asyncio
+async def test_submissions_sql_anti_gaming_constant(patches, monkeypatch) -> None:
+    sheets = _sheets_ok()
+    _patch_endpoints(patches, exercise=_exercise_with_sql(peso=20), sheets=sheets)
+    _stub_generate_sql(monkeypatch, "SELECT 200")  # bate o valor mas não lê tabela
+    response = await _post(
+        _make_app(),
+        "/submissions",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "submission_uuid": "uuid-sql-game",
+            "respostas": ["retorne 200"],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["bulletin"]["total"] == 60  # gaming rejeitado
+
+
+@pytest.mark.asyncio
+async def test_submissions_sql_infra_failure_degraded_full_marks(patches, monkeypatch) -> None:
+    sheets = _sheets_ok()
+    _patch_endpoints(patches, exercise=_exercise_with_sql(peso=20), sheets=sheets)
+    _stub_generate_sql(monkeypatch, "", ok=False, error="HTTP 500")
+    response = await _post(
+        _make_app(),
+        "/submissions",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "submission_uuid": "uuid-sql-degraded",
+            "respostas": ["qualquer prompt"],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bulletin"]["total"] == 80  # nota cheia por convenção
+    assert body["bulletin"]["judge_degraded"] is True
+    import json as _json
+
+    payload = _json.loads(sheets.appended_rows[0].respostas_json)
+    assert payload[0]["gemini_ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_submissions_mixed_reflexao_and_sql(patches, monkeypatch) -> None:
+    sheets = _sheets_ok()
+    base = _make_exercise()
+    perguntas = (
+        Pergunta(texto="Reflita.", peso=10, criterios_avaliacao="cite X"),
+        Pergunta(texto="Some os valores.", peso=20, tipo="sql", query_referencia=_SQL_REF),
+    )
+    exercise = Exercise(
+        id=base.id,
+        titulo=base.titulo,
+        turmas=base.turmas,
+        disponivel_a_partir_de=base.disponivel_a_partir_de,
+        prazo=base.prazo,
+        criterios=base.criterios,
+        perguntas=perguntas,
+        dataset_sql=DatasetSql(schema=_SQL_SCHEMA, seed=_SQL_SEED),
+    )
+    _patch_endpoints(patches, exercise=exercise, sheets=sheets)
+    monkeypatch.setattr(
+        endpoints_module,
+        "grade_respostas",
+        lambda items: [GeminiResult(nota=8, feedback="ok", ok=True) for _ in items],
+    )
+    _stub_generate_sql(monkeypatch, "SELECT AVG(valor) FROM contratos WHERE fornecedor='Alpha'")
+    response = await _post(
+        _make_app(),
+        "/submissions",
+        {
+            "exercicio": "1.1",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+            "submission_uuid": "uuid-mixed",
+            "respostas": ["minha reflexão", "média do Alpha"],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    # 60 base + 8 reflexao + 20 sql = 88
+    assert body["bulletin"]["total"] == 88
+    import json as _json
+
+    payload = _json.loads(sheets.appended_rows[0].respostas_json)
+    assert payload[0]["nota"] == 8  # reflexao
+    assert payload[1]["nota"] == 20  # sql, ordem preservada
+
+
 @pytest.mark.asyncio
 async def test_grade_preview_returns_perguntas(patches) -> None:
     _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=2))

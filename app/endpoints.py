@@ -21,9 +21,16 @@ from pydantic import BaseModel
 from starlette.responses import JSONResponse
 
 from app import roster as roster_module
-from app.curriculum import CurriculumValidationError, Exercise, parse_exercise_yaml
+from app import sql_exec
+from app.curriculum import (
+    CurriculumValidationError,
+    DatasetSql,
+    Exercise,
+    Pergunta,
+    parse_exercise_yaml,
+)
 from app.evidence.shell import InvalidShellEvidence, validate_shell_evidence
-from app.gemini import GeminiResult, grade_respostas
+from app.gemini import GeminiResult, generate_sql, grade_respostas
 from app.github_client import GitHubAPIError, GitHubClient, parse_repo_url
 from app.grader import Bulletin, grade
 from app.primitives import CriterioResult
@@ -389,9 +396,11 @@ def _append_gemini_to_bulletin(
                 passed=gr.nota >= pergunta.peso // 2,  # passou se ≥ 50% do peso
                 points_earned=gr.nota,
                 points_max=pergunta.peso,
-                # Feedback do Gemini puro (justificativa concreta da nota).
+                # Feedback do grader (justificativa concreta da nota).
                 # CLI renderiza em linha separada indentada se > 50 chars.
                 message=gr.feedback,
+                # ok=False ⇒ nota de fallback (grader indisponível) → PROVISÓRIA.
+                degraded=not gr.ok,
             )
         )
         extra_total += gr.nota
@@ -404,9 +413,59 @@ def _append_gemini_to_bulletin(
 
 
 def _grade_with_gemini(exercise: Exercise, respostas: list[str]) -> list[GeminiResult]:
-    return grade_respostas(
-        [(p.texto, p.criterios_avaliacao, r, p.peso) for p, r in zip(exercise.perguntas, respostas)]
+    """Grada cada pergunta conforme seu tipo, preservando a ordem do YAML.
+
+    - ``reflexao`` → judge Gemini subjetivo (``grade_respostas``).
+    - ``sql``      → prompt do aluno vira SELECT (``generate_sql``) e é executado
+      contra o dataset; nota cheia se o resultado bate o gabarito, senão 0.
+
+    Retorna ``GeminiResult`` por pergunta (campo ``ok=False`` = fallback
+    degradado de infra, tanto pro judge quanto pro grader SQL).
+    """
+    results: list[GeminiResult | None] = [None] * len(exercise.perguntas)
+
+    reflexao_items: list[tuple[str, str, str, int]] = []
+    reflexao_idx: list[int] = []
+    for i, (p, r) in enumerate(zip(exercise.perguntas, respostas)):
+        if p.tipo == "sql":
+            results[i] = _grade_one_sql(exercise.dataset_sql, p, r)
+        else:
+            reflexao_idx.append(i)
+            reflexao_items.append((p.texto, p.criterios_avaliacao, r, p.peso))
+
+    if reflexao_items:
+        for idx, gr in zip(reflexao_idx, grade_respostas(reflexao_items)):
+            results[idx] = gr
+
+    return [r for r in results if r is not None]
+
+
+def _grade_one_sql(dataset: DatasetSql | None, pergunta: Pergunta, resposta: str) -> GeminiResult:
+    if dataset is None:  # parse já barra isso; guarda defensiva
+        return GeminiResult(
+            nota=pergunta.peso, feedback="sql_grader_degraded: sem dataset", ok=False
+        )
+
+    gen = generate_sql(resposta, dataset.schema)
+    if not gen.ok:
+        # Falha de infra (Gemini fora) → nota cheia + degraded (bug nosso não pune aluno).
+        return GeminiResult(
+            nota=pergunta.peso,
+            feedback=f"sql_grader_degraded (nota provisória): {gen.error}",
+            ok=False,
+        )
+
+    ev = sql_exec.evaluate(
+        dataset.schema,
+        dataset.seed,
+        pergunta.query_referencia,
+        gen.sql,
+        ordered=pergunta.ordenado,
     )
+    nota = pergunta.peso if ev.matched else 0
+    mark = "✓" if ev.matched else "✗"
+    feedback = f"{mark} {ev.reason}\nSQL gerado a partir do seu prompt: {gen.sql}"
+    return GeminiResult(nota=nota, feedback=feedback, ok=True)
 
 
 @router.post("/submissions")
