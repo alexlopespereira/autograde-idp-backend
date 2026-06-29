@@ -1,0 +1,16 @@
+# Config do gitleaks (CI: .github/workflows/secret-scan.yml).
+# Estende as regras default + allowlist de templates/fixtures.
+title = "gitleaks"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "templates e fixtures (sem segredo real)"
+paths = [
+  '''.*\.example$''',
+  '''.*\.sample$''',
+  '''(^|/)tests?/''',
+  '''.*test_.*\.(py|ts|js)$''',
+  '''\.secrets\.baseline$''',
+]
