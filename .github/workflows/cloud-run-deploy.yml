@@ -57,5 +57,5 @@ jobs:
             --platform=managed \
             --max-instances=1 --concurrency=200 --cpu-boost --min-instances=0 \
             --allow-unauthenticated \
-            --set-env-vars="GOOGLE_OAUTH_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_CLIENT_ID }},ROSTER_URL=${{ secrets.ROSTER_URL }},SHEET_ID=${{ secrets.SHEET_ID }},ROSTER_SHEET_ID=${{ secrets.ROSTER_SHEET_ID }},EXERCISES_BASE_URL=https://raw.githubusercontent.com/alexlopespereira/idp_governodigital/main/exercicios,RATE_LIMIT_BYPASS_EMAILS=${{ secrets.RATE_LIMIT_BYPASS_EMAILS }}" \
+            --set-env-vars="GOOGLE_OAUTH_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_CLIENT_ID }},ROSTER_URL=${{ secrets.ROSTER_URL }},SHEET_ID=${{ secrets.SHEET_ID }},ROSTER_SHEET_ID=${{ secrets.ROSTER_SHEET_ID }},EXERCISES_BASE_URL=https://raw.githubusercontent.com/alexlopespereira/idp_governodigital/main/exercicios,EXERCISES_BASE_URL_IA=https://raw.githubusercontent.com/alexlopespereira/idp_agentes_ia/main/exercicios,RATE_LIMIT_BYPASS_EMAILS=${{ secrets.RATE_LIMIT_BYPASS_EMAILS }}" \
             --update-secrets="GITHUB_PAT=github-pat:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,GEMINI_API_KEY=gemini-api-key:latest"

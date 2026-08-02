@@ -18,7 +18,13 @@ ruff check .                                 # lint (line-length=100, py311)
 docker build -t autograde-backend:local .    # build container local
 ```
 
-Variáveis de ambiente obrigatórias (ver README.md): `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GITHUB_PAT`, `ROSTER_URL`, `SHEET_ID`, `EXERCISES_BASE_URL`. Opcionais: `ROSTER_SHEET_ID` (necessário pra `POST /me/profile`), `RATE_LIMIT_BYPASS_EMAILS` (CSV).
+Variáveis de ambiente obrigatórias (ver README.md): `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GITHUB_PAT`, `ROSTER_URL`, `SHEET_ID`, `EXERCISES_BASE_URL`. Opcionais: `ROSTER_SHEET_ID` (necessário pra `POST /me/profile`), `RATE_LIMIT_BYPASS_EMAILS` (CSV), `EXERCISES_BASE_URL_<CURSO>` (ex.: `EXERCISES_BASE_URL_IA` — base por curso, ver "Multi-curso").
+
+## Multi-curso (app/curso.py)
+
+Um deployment e uma Submissions Sheet servem N cursos. O curso é derivado do **prefixo do id do exercício**: `ia-1.1` → curso `ia`; sem prefixo → `td` (Transformação Digital, legado). Isso resolve de uma vez a agregação (`/me/grades` agrega por `exercicio`, e `ia-1.1` != `1.1`), o roteamento (`EXERCISES_BASE_URL_<CURSO>` → `EXERCISES_BASE_URL`) e a coluna `curso` (T) da Sheet, que é derivada — não digitada.
+
+Ao adicionar curso: prefixo de 2–8 letras minúsculas, YAMLs nomeados com o id completo (`ia-1.1.yaml`, `exercicio: "ia-1.1"`), env var nova nos 3 lugares de sempre, e — se reaproveitar exercício com evidência shell — registrar o id qualificado em `app/evidence/shell.py:_WHITELIST`. O CLI espelha tudo em `autograde_idp/curso.py`.
 
 Deploy: `gcloud builds submit --config=cloudbuild.yaml --substitutions=...`. CI workflow `cloud-run-deploy.yml` é **`workflow_dispatch` only** — não habilitar `on: push` sem confirmação (turma ativa). Quando atualizar deploy, manter `cloudbuild.yaml` e `.github/workflows/cloud-run-deploy.yml` em sync (env vars + secrets espelhados).
 
@@ -29,7 +35,7 @@ Deploy: `gcloud builds submit --config=cloudbuild.yaml --substitutions=...`. CI 
 `/grade-preview` e `/submissions` compartilham `_validate_and_grade`:
 
 ```
-load_exercise(id) → fetch YAML de EXERCISES_BASE_URL → parse_exercise_yaml
+load_exercise(id) → curso.split_exercise_id(id) → base URL do curso → fetch YAML → parse_exercise_yaml
   → checa janela (disponivel_a_partir_de) e turma
   → parse_repo_url + checa owner == user.github_username
   → validate_shell_evidence (whitelist por exercício, clock-skew ±30min)
@@ -62,7 +68,7 @@ Backend faz proxy do `/token` do Google (Device Flow) pra não vazar `GOOGLE_OAU
 
 Dois writers, contratos diferentes — **não unificar** (decisão consciente no prd.json US-02).
 
-- `SheetsWriter` → tabs `submissoes` (19 colunas, schema em `COLUMNS`) e `previews` (3 colunas, pra rate-limit do preview-com-Gemini). Idempotência por `submission_id` (lê coluna B antes de append). Telemetria de row-count antes/depois detecta `SHEETS_DROP_DETECTED` (Sheets API às vezes silenciosamente perde appends). `asyncio.Lock` module-level serializa appends — funciona porque Cloud Run roda `--max-instances=1` (um único event loop).
+- `SheetsWriter` → tabs `submissoes` (20 colunas, schema em `COLUMNS`) e `previews` (3 colunas, pra rate-limit do preview-com-Gemini). Idempotência por `submission_id` (lê coluna B antes de append). Telemetria de row-count antes/depois detecta `SHEETS_DROP_DETECTED` (Sheets API às vezes silenciosamente perde appends). `asyncio.Lock` module-level serializa appends — funciona porque Cloud Run roda `--max-instances=1` (um único event loop).
 - `RosterWriter` → escreve `nome` e `github_username` na Roster Sheet via `POST /me/profile`. **Anti-hijacking**: só atualiza célula se está vazia. `valueInputOption='RAW'` (string `=BAR()` não vira fórmula). Retorna `ProfileUpdateResult(updated, skipped)`. Endpoint invalida `app.roster._clear_cache()` pós-update.
 
 Auth pra Sheets: `google.auth.default()` (ADC). Em produção usa SA do Cloud Run; em dev usa `gcloud auth application-default login`.

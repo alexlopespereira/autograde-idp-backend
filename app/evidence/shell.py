@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from app.curriculum import Exercise
+from app.curso import CURSO_DEFAULT, qualify_exercise_id
 
 CLOCK_SKEW_TOLERANCE = timedelta(minutes=30)
 
@@ -61,13 +62,25 @@ _MCP_4_2_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^python cliente_teste\.py$"),
 )
 
+# Exercícios 1.2–1.4 do módulo de fundamentos são idênticos nos dois cursos
+# (mesma evidência `gh`), então a whitelist é registrada sob o id qualificado
+# de cada curso — `1.2` (td, legado sem prefixo) e `ia-1.2`. Explícito de
+# propósito: um `ia-4.1` futuro com conteúdo próprio NÃO herda a whitelist
+# do `4.1` de TD por acidente.
+_GH_BASIC_BASE_IDS = ("1.2", "1.3", "1.4")
+_CURSOS_COM_FUNDAMENTOS = (CURSO_DEFAULT, "ia")
+
 _WHITELIST: dict[str, tuple[re.Pattern[str], ...]] = {
-    "1.2": _GH_BASIC_PATTERNS,
-    "1.3": _GH_BASIC_PATTERNS,
-    "1.4": _GH_BASIC_PATTERNS,
-    "4.1": _API_4_1_PATTERNS,
-    "4.2": _MCP_4_2_PATTERNS,
+    qualify_exercise_id(curso, base_id): _GH_BASIC_PATTERNS
+    for curso in _CURSOS_COM_FUNDAMENTOS
+    for base_id in _GH_BASIC_BASE_IDS
 }
+_WHITELIST.update(
+    {
+        "4.1": _API_4_1_PATTERNS,
+        "4.2": _MCP_4_2_PATTERNS,
+    }
+)
 
 
 class InvalidShellEvidence(Exception):

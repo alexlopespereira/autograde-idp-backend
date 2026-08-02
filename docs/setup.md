@@ -132,6 +132,15 @@ Schema sugerido:
 2. **Não pública**: só Service Account terá Editor (passo 6).
 3. Copiar o `SHEET_ID` para `SHEET_ID` no Cloud Run.
 
+> **Headers são manuais.** O schema real é `app/sheets_writer.py:COLUMNS`
+> (20 colunas, `A:T`) — o writer só faz append, não cria header. Ao adicionar
+> coluna nova, escrever o header na célula correspondente. Atual: `S1` =
+> `judge_degraded`, `T1` = `curso`.
+>
+> **Uma Sheet serve todos os cursos.** A coluna `curso` (T) separa TD de
+> Agentes de IA; a unicidade entre cursos vem do prefixo no id do exercício
+> (`ia-1.1`). Ver "Multi-curso" no README.
+
 ---
 
 ## 6. ⏳ Compartilhar Submissions Sheet com a Service Account runtime
@@ -250,7 +259,8 @@ no bucket de source. `PROJECT_NUMBER = 1065810445001`.
 | `ROSTER_URL`                    | 4              | não      |
 | `ROSTER_SHEET_ID`               | 4.1            | não      |
 | `SHEET_ID`                      | 5              | não      |
-| `EXERCISES_BASE_URL`            | curriculum     | não — aponta pro raw do `assistente-aulas` |
+| `EXERCISES_BASE_URL`            | curriculum     | não — raw do `idp_governodigital` (curso `td`, fallback geral) |
+| `EXERCISES_BASE_URL_IA`         | curriculum     | não — raw do `idp_agentes_ia` (curso `ia`) |
 
 Credenciais sensíveis ficam em **Cloud Run secrets** (Secret Manager), nunca em `.env` versionado.
 

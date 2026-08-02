@@ -83,10 +83,14 @@ def _build_mock_service(
 # ---------- dataclass ------------------------------------------------------
 
 
-def test_columns_count_is_19() -> None:
+def test_columns_count_is_20() -> None:
     # 18 anteriores + judge_degraded (flag de audit do LLM-judge degradado)
-    assert len(COLUMNS) == 19
-    assert COLUMNS[-1] == "judge_degraded"
+    # + curso (dimensão multi-curso, derivada do prefixo do id do exercício)
+    assert len(COLUMNS) == 20
+    assert COLUMNS[-1] == "curso"
+    # judge_degraded não pode ter mudado de posição: colunas novas só entram
+    # no FIM, senão as linhas históricas da Sheet desalinham.
+    assert COLUMNS[18] == "judge_degraded"
 
 
 def test_row_to_values_preserves_column_order() -> None:
@@ -98,7 +102,8 @@ def test_row_to_values_preserves_column_order() -> None:
     assert values[16] == ""  # ai_evidence_hashes default
     assert values[17] == ""  # respostas_json default
     assert values[18] is False  # judge_degraded default
-    assert len(values) == len(COLUMNS) == 19
+    assert values[19] == "td"  # curso default (id legado sem prefixo)
+    assert len(values) == len(COLUMNS) == 20
 
 
 def test_submission_row_default_ai_evidence_empty() -> None:

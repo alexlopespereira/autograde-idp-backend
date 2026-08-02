@@ -66,10 +66,31 @@ CI deploy automático em push pra `main` está em `.github/workflows/cloud-run-d
 | `GITHUB_PAT` | GitHub PAT classic | sim — secret |
 | `ROSTER_URL` | Roster Sheet pública | não |
 | `SHEET_ID` | Submissions Sheet | não |
-| `EXERCISES_BASE_URL` | URL base dos `*.yaml` | não |
+| `EXERCISES_BASE_URL` | URL base dos `*.yaml` (fallback de qualquer curso) | não |
+| `EXERCISES_BASE_URL_IA` | URL base dos `*.yaml` do curso de Agentes de IA | não |
 
-`EXERCISES_BASE_URL` aponta para o raw GitHub onde os exercícios moram. Default sugerido:
-`https://raw.githubusercontent.com/alexlopespereira/assistente-aulas/main/autograde/exercicios`.
+`EXERCISES_BASE_URL` aponta para o raw GitHub onde os exercícios moram:
+`https://raw.githubusercontent.com/alexlopespereira/idp_governodigital/main/exercicios`.
+
+### Multi-curso
+
+O id do exercício carrega o curso como prefixo: `ia-1.1` → curso `ia`; sem
+prefixo → curso `td` (Transformação Digital, o legado). O backend resolve a
+base URL por curso, na ordem `EXERCISES_BASE_URL_<CURSO>` → `EXERCISES_BASE_URL`
+(ver `app/curso.py`). Para adicionar um curso novo:
+
+1. Escolher um prefixo de 2–8 letras minúsculas (ex.: `ia`).
+2. Nomear os YAMLs com o id completo — `ia-1.1.yaml`, com `exercicio: "ia-1.1"`.
+3. Setar `EXERCISES_BASE_URL_<PREFIXO_MAIÚSCULO>` apontando pro repo dos YAMLs
+   (3 lugares: `cloudbuild.yaml`, `.github/workflows/cloud-run-deploy.yml` e
+   esta tabela).
+4. Se o curso reaproveitar exercícios com evidência shell, registrar os ids
+   qualificados em `app/evidence/shell.py:_WHITELIST`.
+
+Por que o prefixo e não só uma coluna `curso`: `/me/grades` agrega por
+`exercicio`, então dois cursos com um `1.1` cada fundiriam as notas do aluno.
+A coluna `curso` (T) na Submissions Sheet é derivada do prefixo e serve pra
+filtro/pivot — não é a fonte da unicidade.
 
 ---
 

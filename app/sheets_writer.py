@@ -28,11 +28,13 @@ from typing import Any
 import google.auth
 from googleapiclient.discovery import Resource, build
 
+from app.curso import CURSO_DEFAULT
+
 log = logging.getLogger(__name__)
 
 SHEET_TAB = "submissoes"
 ID_COLUMN_RANGE = f"{SHEET_TAB}!B:B"
-READ_RANGE = f"{SHEET_TAB}!A:S"
+READ_RANGE = f"{SHEET_TAB}!A:T"
 APPEND_RANGE = SHEET_TAB
 SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
 
@@ -62,6 +64,10 @@ COLUMNS: tuple[str, ...] = (
     "ai_evidence_hashes",
     "respostas_json",
     "judge_degraded",
+    # Coluna T. SEMPRE apender colunas novas no FIM: os índices em
+    # endpoints.py (EMAIL_COL_IDX=2, EXERCICIO_COL_IDX=5, ...) são posicionais
+    # e inserir no meio desalinharia todas as linhas históricas da Sheet.
+    "curso",
 )
 
 
@@ -89,6 +95,12 @@ class SubmissionRow:
     # (LLM-judge indisponível). Coluna S na Sheet — filtra os que precisam de
     # re-correção manual. Header manual em S1: "judge_degraded".
     judge_degraded: bool = False
+    # Curso da submissão, derivado do prefixo do id do exercício (`ia-1.1` →
+    # "ia"; `1.1` → "td"). Coluna T — existe pra filtro/pivot do professor; a
+    # unicidade entre cursos já vem do próprio id. Header manual em T1:
+    # "curso". O default mantém coerentes as linhas históricas, escritas
+    # quando a coluna ainda não existia.
+    curso: str = CURSO_DEFAULT
 
 
 @dataclass(frozen=True)

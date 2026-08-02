@@ -29,6 +29,7 @@ from app.curriculum import (
     Pergunta,
     parse_exercise_yaml,
 )
+from app.curso import CURSO_DEFAULT, CursoError, exercises_base_url, split_exercise_id
 from app.evidence.shell import InvalidShellEvidence, validate_shell_evidence
 from app.gemini import GeminiResult, generate_sql, grade_respostas
 from app.github_client import GitHubAPIError, GitHubClient, parse_repo_url
@@ -90,16 +91,15 @@ def _http_fetcher(url: str) -> str:
     return response.text
 
 
-def _exercises_base_url() -> str:
-    base = os.environ.get("EXERCISES_BASE_URL")
-    if not base:
-        raise RuntimeError("EXERCISES_BASE_URL not set")
-    return base.rstrip("/")
-
-
 def load_exercise(exercicio_id: str) -> tuple[Exercise, str]:
-    """Fetch raw YAML and parse Exercise. Returns (exercise, yaml_text)."""
-    base = _exercises_base_url()
+    """Fetch raw YAML and parse Exercise. Returns (exercise, yaml_text).
+
+    A base URL é resolvida pelo curso embutido no id (``ia-1.1`` → curso
+    ``ia``), permitindo que cursos diferentes morem em repositórios
+    diferentes de exercícios. O arquivo mantém o id COMPLETO no nome.
+    """
+    curso, _ = split_exercise_id(exercicio_id)
+    base = exercises_base_url(curso)
     url = f"{base}/{exercicio_id}.yaml"
     yaml_text = _http_fetcher(url)
     exercise = parse_exercise_yaml(yaml_text)
@@ -528,6 +528,7 @@ async def submissions(body: SubmissionRequestBody, request: Request) -> Any:
             json.dumps(respostas_payload, ensure_ascii=False) if respostas_payload else ""
         ),
         judge_degraded=any(c.degraded for c in bulletin.criterios),
+        curso=split_exercise_id(body.exercicio)[0],
     )
 
     result: AppendResult = await writer.append_submission(row)
@@ -565,8 +566,16 @@ async def me_grades(request: Request) -> Any:
         ts = row[TIMESTAMP_COL_IDX]
         entry = by_exercicio.get(exercicio)
         if entry is None:
+            # `curso` sai do próprio id, não da coluna T: linhas históricas
+            # (anteriores à coluna) continuam agrupando corretamente. Id
+            # malformado numa linha antiga não pode derrubar o boletim.
+            try:
+                curso = split_exercise_id(exercicio)[0]
+            except CursoError:
+                curso = CURSO_DEFAULT
             by_exercicio[exercicio] = {
                 "exercicio": exercicio,
+                "curso": curso,
                 "melhor_nota": nota,
                 "num_tentativas": 1,
                 "ultima_submissao_at": ts,
