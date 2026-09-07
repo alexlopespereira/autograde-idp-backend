@@ -28,8 +28,10 @@ NOW = datetime(2026, 5, 10, 12, 0, 0, tzinfo=timezone.utc)
 
 EMAIL_TD = "td-aluno@idp.edu.br"
 EMAIL_MBA = "mba-aluno@idp.edu.br"
+EMAIL_AMBAS = "ambas@idp.edu.br"
 GH_TD = "td-fulano"
 GH_MBA = "mba-cicrano"
+GH_AMBAS = "ambas-beltrano"
 
 
 PRIMITIVE_PASS = "test.multi_turma.always_pass"
@@ -75,6 +77,12 @@ def roster_two_turmas() -> dict[str, RosterEntry]:
         EMAIL_MBA: RosterEntry(
             email=EMAIL_MBA, nome="MBA Aluno",
             turma="MBA-IDP-2026", github_username=GH_MBA,
+        ),
+        # Aluno que cursa as DUAS disciplinas: uma linha só no roster, a
+        # coluna `turma` lista as duas separadas por ';'.
+        EMAIL_AMBAS: RosterEntry(
+            email=EMAIL_AMBAS, nome="Aluno das Duas",
+            turma="TD-2026-01;MBA-IDP-2026", github_username=GH_AMBAS,
         ),
     }
 
@@ -155,7 +163,7 @@ async def test_grade_preview_blocks_mba_student_from_td_only_exercise(patches):
         email=EMAIL_MBA,
     )
     assert response.status_code == 403
-    assert response.json() == {"error": "turma_not_eligible"}
+    assert response.json()["error"] == "turma_not_eligible"
 
 
 @pytest.mark.asyncio
@@ -167,7 +175,7 @@ async def test_grade_preview_blocks_td_student_from_mba_only_exercise(patches):
         email=EMAIL_TD,
     )
     assert response.status_code == 403
-    assert response.json() == {"error": "turma_not_eligible"}
+    assert response.json()["error"] == "turma_not_eligible"
 
 
 @pytest.mark.asyncio
@@ -214,4 +222,82 @@ async def test_submissions_blocks_wrong_turma(patches):
         email=EMAIL_MBA,
     )
     assert response.status_code == 403
-    assert response.json() == {"error": "turma_not_eligible"}
+    assert response.json()["error"] == "turma_not_eligible"
+
+
+# ---------- aluno matriculado em mais de uma turma --------------------------
+
+
+@pytest.mark.asyncio
+async def test_multi_turma_student_passes_in_each_turma(patches):
+    """Uma linha de roster com `TD-2026-01;MBA-IDP-2026` habilita os dois cursos."""
+    for turma in ("TD-2026-01", "MBA-IDP-2026"):
+        _patch_endpoints(patches, _make_exercise(turmas=(turma,)))
+        response = await _post(
+            _make_app(), "/grade-preview",
+            {"exercicio": "1.2", "repo_url": f"https://github.com/{GH_AMBAS}/projeto"},
+            email=EMAIL_AMBAS,
+        )
+        assert response.status_code == 200, turma
+
+
+@pytest.mark.asyncio
+async def test_multi_turma_student_still_blocked_from_third_turma(patches):
+    _patch_endpoints(patches, _make_exercise(turmas=("IA-2026-02",)))
+    response = await _post(
+        _make_app(), "/grade-preview",
+        {"exercicio": "1.2", "repo_url": f"https://github.com/{GH_AMBAS}/projeto"},
+        email=EMAIL_AMBAS,
+    )
+    assert response.status_code == 403
+    assert response.json()["error"] == "turma_not_eligible"
+
+
+@pytest.mark.asyncio
+async def test_turma_not_eligible_message_is_actionable(patches):
+    """A mensagem precisa dizer a turma do aluno, a do exercício, e o que fazer.
+
+    Regressão do relato real: o aluno via só `{"error":"turma_not_eligible"}`
+    e tentava `autograde login`, que não tem nada a ver com o problema.
+    """
+    _patch_endpoints(patches, _make_exercise(turmas=("IA-2026-02",)))
+    response = await _post(
+        _make_app(), "/grade-preview",
+        {"exercicio": "1.2", "repo_url": f"https://github.com/{GH_TD}/projeto"},
+        email=EMAIL_TD,
+    )
+    msg = response.json()["message"]
+    assert "TD-2026-01" in msg          # turma do aluno
+    assert "IA-2026-02" in msg          # turma do exercício
+    assert "roster" in msg              # onde se conserta
+    assert "autograde login" in msg     # e o que NÃO conserta
+    assert "FAQ.md#turma_not_eligible" in msg
+
+
+@pytest.mark.asyncio
+async def test_submissions_records_matched_turma_not_raw_column(patches):
+    """A coluna `turma` da Sheet recebe a turma que casou com o exercício.
+
+    Sem isso, um aluno multi-turma gravaria `TD-2026-01;MBA-IDP-2026` em toda
+    linha e o relatório por turma do professor ficaria inutilizável.
+    """
+    sheets = _patch_endpoints(patches, _make_exercise(turmas=("MBA-IDP-2026",)))
+    captured: list[Any] = []
+    original = sheets.append_submission
+
+    async def spy(row: Any) -> AppendResult:
+        captured.append(row)
+        return await original(row)
+
+    sheets.append_submission = spy  # type: ignore[method-assign]
+    response = await _post(
+        _make_app(), "/submissions",
+        {
+            "exercicio": "1.2",
+            "repo_url": f"https://github.com/{GH_AMBAS}/projeto",
+            "submission_uuid": "uuid-multi",
+        },
+        email=EMAIL_AMBAS,
+    )
+    assert response.status_code == 200
+    assert captured[0].turma == "MBA-IDP-2026"

@@ -62,6 +62,15 @@ class SubmissionRequestBody(GradeRequestBody):
     submission_uuid: str
 
 
+# Toda mensagem de erro aponta pra uma ancora da FAQ. O aluno que nao leu o
+# tutorial precisa de UM link que resolva o caso dele, nao do manual inteiro.
+FAQ_URL = "https://github.com/alexlopespereira/autograde-idp/blob/main/docs/FAQ.md"
+
+
+def _faq(anchor: str) -> str:
+    return f"Detalhes: {FAQ_URL}#{anchor}"
+
+
 RATE_LIMIT_DAILY_CAP = 10  # tanto pra preview-com-respostas quanto pra submissions
 RATE_LIMIT_COOLDOWN_SECONDS = 30
 # Reset do cap é à meia-noite local (Brasil) — pedagogicamente intuitivo.
@@ -186,6 +195,18 @@ def _bulletin_to_dict(b: Bulletin) -> dict[str, Any]:
     }
 
 
+def _turma_for_exercise(user: Any, exercise: Exercise) -> str:
+    """Turma que sera gravada na Sheet: a que casou com o exercicio.
+
+    Com a coluna `turma` aceitando varias turmas (`TD-2026-01;IA-2026-02`),
+    gravar a string crua misturaria os cursos no relatorio do professor.
+    """
+    match = [t for t in user.turmas if t in exercise.turmas]
+    if match:
+        return match[0]
+    return user.turma
+
+
 def _json_error(status_code: int, error: str, message: str = "") -> JSONResponse:
     body: dict[str, str] = {"error": error}
     if message:
@@ -203,27 +224,77 @@ def _validate_and_grade(
         exercise, yaml_text = load_exercise(body.exercicio)
     except CurriculumValidationError as exc:
         log.warning("exercise_validation_failed exercicio=%s err=%s", body.exercicio, exc)
-        return _json_error(404, "exercise_not_found", str(exc))
+        return _json_error(
+            404,
+            "exercise_not_found",
+            f"O YAML do exercicio {body.exercicio!r} existe mas esta invalido: "
+            f"{exc}. Isso e um problema do curso, nao seu — avise o professor. "
+            + _faq("exercise_not_found"),
+        )
     except Exception as exc:  # noqa: BLE001 - network / unknown errors
         log.warning("exercise_load_failed exercicio=%s err=%s", body.exercicio, exc)
-        return _json_error(404, "exercise_not_found")
+        return _json_error(
+            404,
+            "exercise_not_found",
+            f"Nao encontrei o exercicio {body.exercicio!r}. Confira o id: os "
+            f"exercicios de Agentes de IA levam prefixo (`ia-1.1`, `ia-1.2`, "
+            f"`ia-1.3`, `ia-1.4`) e os de Transformacao Digital nao (`1.1`, "
+            f"`2.1`). Digitar `1.3` no lugar de `ia-1.3` cai aqui. "
+            + _faq("exercise_not_found"),
+        )
 
     submitted_at = _now_utc()
     disponivel = _ensure_aware_utc(exercise.disponivel_a_partir_de)
     if submitted_at < disponivel:
-        return _json_error(403, "exercise_not_open_yet")
+        return _json_error(
+            403,
+            "exercise_not_open_yet",
+            f"O exercicio {exercise.id} abre em "
+            f"{exercise.disponivel_a_partir_de.isoformat()}. Nao ha nada pra "
+            f"consertar do seu lado — volte depois dessa data. "
+            + _faq("exercise_not_open_yet"),
+        )
 
     user = request.state.user
-    if exercise.turmas and user.turma not in exercise.turmas:
-        return _json_error(403, "turma_not_eligible")
+    if exercise.turmas and not set(user.turmas) & set(exercise.turmas):
+        minhas = ", ".join(user.turmas) or "(vazio)"
+        dele = ", ".join(exercise.turmas)
+        return _json_error(
+            403,
+            "turma_not_eligible",
+            f"Voce esta matriculado em: {minhas}. O exercicio {exercise.id} e "
+            f"da(s) turma(s): {dele}. Isso NAO se resolve com `autograde "
+            f"login` — quem define sua turma e a planilha do roster, nao o "
+            f"seu login Google. Peca ao professor para corrigir a coluna "
+            f"`turma` da sua linha (ela aceita mais de uma turma separada por "
+            f"`;`, ex.: `{minhas};{exercise.turmas[0]}`). Se voce quis rodar "
+            f"outro exercicio, confira o id: `autograde validar <id>`. "
+            + _faq("turma_not_eligible"),
+        )
 
     try:
         owner_repo = parse_repo_url(body.repo_url)
     except ValueError as exc:
-        return _json_error(400, "invalid_repo_url", str(exc))
+        return _json_error(
+            400,
+            "invalid_repo_url",
+            f"O remote `origin` deste diretorio ({body.repo_url!r}) nao e uma "
+            f"URL de repositorio do GitHub ({exc}). Rode `git config --get "
+            f"remote.origin.url` pra ver o que esta configurado — voce "
+            f"provavelmente esta no diretorio errado. " + _faq("invalid_repo_url"),
+        )
     owner = owner_repo.split("/", 1)[0]
     if owner.lower() != user.github_username.lower():
-        return _json_error(403, "repo_owner_mismatch")
+        return _json_error(
+            403,
+            "repo_owner_mismatch",
+            f"O repo {owner_repo} pertence ao usuario GitHub `{owner}`, mas o "
+            f"github_username cadastrado no seu roster e "
+            f"`{user.github_username or '(vazio)'}`. Ou voce esta no diretorio "
+            f"de outro repo, ou o roster tem o username errado. Confira com "
+            f"`gh auth status` qual conta GitHub voce usa e avise o professor "
+            f"se o roster estiver desatualizado. " + _faq("repo_owner_mismatch"),
+        )
 
     try:
         shell_context = validate_shell_evidence(
@@ -234,13 +305,29 @@ def _validate_and_grade(
         )
     except InvalidShellEvidence as exc:
         log.warning("shell_evidence_invalid exercicio=%s reason=%s", body.exercicio, exc.reason)
-        return _json_error(400, "invalid_shell_evidence", exc.reason)
+        return _json_error(
+            400,
+            "invalid_shell_evidence",
+            f"A evidencia local coletada pela CLI foi rejeitada: {exc.reason}. "
+            f"Normalmente isso significa CLI desatualizada — rode `git pull && "
+            f"pip install -e .` no diretorio do autograde-idp. "
+            + _faq("invalid_shell_evidence"),
+        )
 
     try:
         github_evidence = get_github_client().collect_evidence(body.repo_url)
     except GitHubAPIError as exc:
         log.error("github_collect_failed status=%d", exc.status_code)
-        return _json_error(502, "github_unavailable")
+        return _json_error(
+            502,
+            "github_unavailable",
+            f"Nao consegui ler {body.repo_url} pela API do GitHub "
+            f"(HTTP {exc.status_code}). Se o repo for PRIVADO ou tiver sido "
+            f"renomeado/apagado, o backend nao enxerga: deixe-o publico em "
+            f"Settings > General > Danger Zone > Change visibility. Se o repo "
+            f"esta publico e acessivel, foi instabilidade do GitHub — tente de "
+            f"novo em um minuto. " + _faq("github_unavailable"),
+        )
 
     evidence: dict[str, Any] = {
         **github_evidence,
@@ -307,7 +394,14 @@ def _validate_respostas(
     if not perguntas:
         return []
     if respostas is None:
-        return _json_error(400, "respostas_missing", "exercício exige respostas")
+        return _json_error(
+            400,
+            "respostas_missing",
+            "Este exercicio tem pergunta de reflexao e ela precisa ser "
+            "respondida. Rode `autograde validar` num terminal interativo "
+            "(sem pipe, sem redirect, sem `--auto-submit` em script). "
+            + _faq("perguntas"),
+        )
     if len(respostas) != len(perguntas):
         return _json_error(
             400,
@@ -369,7 +463,9 @@ def _check_rate_limit(
             return _json_error(
                 429,
                 f"{error_prefix}_cooldown",
-                f"aguarde {RATE_LIMIT_COOLDOWN_SECONDS}s entre tentativas",
+                f"Aguarde {RATE_LIMIT_COOLDOWN_SECONDS}s entre tentativas e "
+                f"rode o mesmo comando de novo — nada foi perdido. "
+                + _faq("rate_limit"),
             )
         if _today_local(row_ts) == today:
             count_today += 1
@@ -377,7 +473,10 @@ def _check_rate_limit(
         return _json_error(
             429,
             f"{error_prefix}_daily_cap",
-            f"limite de {RATE_LIMIT_DAILY_CAP} tentativas/dia atingido neste exercício",
+            f"Voce ja usou as {RATE_LIMIT_DAILY_CAP} tentativas de hoje neste "
+            f"exercicio. O contador zera a meia-noite (horario de Brasilia). "
+            f"Suas submissoes anteriores continuam valendo — a MAIOR nota e "
+            f"a que conta. " + _faq("rate_limit"),
         )
     return None
 
@@ -512,7 +611,7 @@ async def submissions(body: SubmissionRequestBody, request: Request) -> Any:
         submission_id=body.submission_uuid,
         email=user.email,
         nome=user.roster.nome,
-        turma=user.turma,
+        turma=_turma_for_exercise(user, exercise),
         exercicio=body.exercicio,
         nota=bulletin.total,
         nota_max=bulletin.max_total,
@@ -534,7 +633,13 @@ async def submissions(body: SubmissionRequestBody, request: Request) -> Any:
     result: AppendResult = await writer.append_submission(row)
 
     if result.written and result.row_count_after != result.row_count_before + 1:
-        return _json_error(503, "sheets_drop_detected")
+        return _json_error(
+            503,
+            "sheets_drop_detected",
+            "A planilha de submissoes nao confirmou a gravacao. Rode "
+            "`autograde validar` de novo — a CLI reusa o mesmo id de "
+            "submissao, entao nao vai duplicar sua nota. " + _faq("erro_5xx"),
+        )
 
     return {
         "bulletin": _bulletin_to_dict(bulletin),
@@ -597,6 +702,7 @@ async def me_identity(request: Request) -> Any:
         "email": user.email,
         "nome": user.roster.nome,
         "turma": user.turma,
+        "turmas": list(user.turmas),
         "github_username": user.roster.github_username,
     }
 
@@ -604,11 +710,21 @@ async def me_identity(request: Request) -> Any:
 @router.post("/me/profile")
 async def me_profile(body: ProfileUpdateRequestBody, request: Request) -> Any:
     if not GITHUB_USERNAME_RE.match(body.github_username):
-        return _json_error(400, "invalid_github_username")
+        return _json_error(
+            400,
+            "invalid_github_username",
+            "Username do GitHub invalido. Use so o seu login (sem `@`, sem "
+            "URL): letras, numeros e hifen, ate 39 caracteres.",
+        )
     try:
         writer = get_roster_writer()
     except RuntimeError:
-        return _json_error(500, "missing_roster_sheet_config")
+        return _json_error(
+            500,
+            "missing_roster_sheet_config",
+            "O backend esta sem ROSTER_SHEET_ID configurado. E um problema do "
+            "servidor — avise o professor.",
+        )
     user = request.state.user
     result = await asyncio.to_thread(
         writer.update_profile, user.email, body.nome, body.github_username

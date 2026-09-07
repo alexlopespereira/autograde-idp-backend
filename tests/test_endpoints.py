@@ -210,7 +210,7 @@ async def test_grade_preview_exercise_not_open_yet(patches) -> None:
         {"exercicio": "1.1", "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto"},
     )
     assert response.status_code == 403
-    assert response.json() == {"error": "exercise_not_open_yet"}
+    assert response.json()["error"] == "exercise_not_open_yet"
 
 
 @pytest.mark.asyncio
@@ -222,7 +222,7 @@ async def test_grade_preview_repo_owner_mismatch(patches) -> None:
         {"exercicio": "1.1", "repo_url": "https://github.com/outra-pessoa/projeto"},
     )
     assert response.status_code == 403
-    assert response.json() == {"error": "repo_owner_mismatch"}
+    assert response.json()["error"] == "repo_owner_mismatch"
 
 
 @pytest.mark.asyncio
@@ -313,7 +313,7 @@ async def test_submissions_drop_detection_returns_503(patches) -> None:
         },
     )
     assert response.status_code == 503
-    assert response.json() == {"error": "sheets_drop_detected"}
+    assert response.json()["error"] == "sheets_drop_detected"
 
 
 @pytest.mark.asyncio
@@ -330,7 +330,7 @@ async def test_submissions_exercise_not_open_yet(patches) -> None:
         },
     )
     assert response.status_code == 403
-    assert response.json() == {"error": "exercise_not_open_yet"}
+    assert response.json()["error"] == "exercise_not_open_yet"
 
 
 @pytest.mark.asyncio
@@ -384,6 +384,7 @@ async def test_me_identity_returns_email_nome_turma_github(patches) -> None:
         "email": EMAIL,
         "nome": "Aluno Fulano",
         "turma": "TD-2026-01",
+        "turmas": ["TD-2026-01"],
         "github_username": GITHUB_USERNAME,
     }
 
@@ -414,6 +415,7 @@ async def test_me_identity_returns_empty_github_username_when_not_set(monkeypatc
         "email": EMAIL,
         "nome": "Aluno Fulano",
         "turma": "TD-2026-01",
+        "turmas": ["TD-2026-01"],
         "github_username": "",
     }
 
@@ -1382,7 +1384,7 @@ async def test_me_profile_invalid_github_username_returns_400(
         {"nome": "Foo", "github_username": bad_username},
     )
     assert response.status_code == 400
-    assert response.json() == {"error": "invalid_github_username"}
+    assert response.json()["error"] == "invalid_github_username"
     # Validação acontece ANTES do RosterWriter — não deve nem chamar.
     assert fake.calls == []
 
@@ -1419,7 +1421,7 @@ async def test_me_profile_missing_roster_sheet_config_returns_500(patches) -> No
         {"nome": "Foo Bar", "github_username": "foo-bar"},
     )
     assert response.status_code == 500
-    assert response.json() == {"error": "missing_roster_sheet_config"}
+    assert response.json()["error"] == "missing_roster_sheet_config"
 
 
 # ---------- _bulletin_to_dict: flag judge_degraded -------------------------

@@ -132,3 +132,39 @@ def test_fetch_roster_caches_within_ttl(monkeypatch):
     fake_clock[0] += 2  # total elapsed = 301
     fetch_roster(url, fetcher=fetcher)
     assert calls["n"] == 2
+
+
+# ---------- coluna `turma` com mais de uma turma -----------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,esperado",
+    [
+        ("TD-2026-01", ("TD-2026-01",)),
+        ("TD-2026-01;IA-2026-02", ("TD-2026-01", "IA-2026-02")),
+        ("TD-2026-01, IA-2026-02", ("TD-2026-01", "IA-2026-02")),
+        ("TD-2026-01|IA-2026-02", ("TD-2026-01", "IA-2026-02")),
+        ("  TD-2026-01 ;; IA-2026-02  ", ("TD-2026-01", "IA-2026-02")),
+        ("TD-2026-01;TD-2026-01", ("TD-2026-01",)),  # dedupe
+        ("", ()),
+    ],
+)
+def test_split_turmas(raw, esperado):
+    assert roster.split_turmas(raw) == esperado
+
+
+def test_roster_entry_exposes_turmas():
+    entries = roster.parse_roster(
+        "email,nome,turma,github_username\n"
+        "aluno@idp.edu.br,Aluno,TD-2026-01;IA-2026-02,fulano\n"
+    )
+    entry = entries["aluno@idp.edu.br"]
+    assert entry.turma == "TD-2026-01;IA-2026-02"  # coluna crua preservada
+    assert entry.turmas == ("TD-2026-01", "IA-2026-02")
+
+
+def test_roster_still_rejects_empty_turma():
+    with pytest.raises(roster.RosterValidationError):
+        roster.parse_roster(
+            "email,nome,turma,github_username\naluno@idp.edu.br,Aluno,,fulano\n"
+        )
