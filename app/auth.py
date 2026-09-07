@@ -48,7 +48,7 @@ class AuthenticatedUser:
 
     @property
     def turmas(self) -> tuple[str, ...]:
-        """Todas as turmas do aluno (a coluna aceita ``TD-2026-01;IA-2026-02``)."""
+        """Todas as turmas do aluno (a coluna aceita ``TD-2026-01;IA-2026-01``)."""
         return self.roster.turmas
 
 

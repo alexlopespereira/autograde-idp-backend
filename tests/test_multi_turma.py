@@ -243,7 +243,7 @@ async def test_multi_turma_student_passes_in_each_turma(patches):
 
 @pytest.mark.asyncio
 async def test_multi_turma_student_still_blocked_from_third_turma(patches):
-    _patch_endpoints(patches, _make_exercise(turmas=("IA-2026-02",)))
+    _patch_endpoints(patches, _make_exercise(turmas=("IA-2026-01",)))
     response = await _post(
         _make_app(), "/grade-preview",
         {"exercicio": "1.2", "repo_url": f"https://github.com/{GH_AMBAS}/projeto"},
@@ -260,7 +260,7 @@ async def test_turma_not_eligible_message_is_actionable(patches):
     Regressão do relato real: o aluno via só `{"error":"turma_not_eligible"}`
     e tentava `autograde login`, que não tem nada a ver com o problema.
     """
-    _patch_endpoints(patches, _make_exercise(turmas=("IA-2026-02",)))
+    _patch_endpoints(patches, _make_exercise(turmas=("IA-2026-01",)))
     response = await _post(
         _make_app(), "/grade-preview",
         {"exercicio": "1.2", "repo_url": f"https://github.com/{GH_TD}/projeto"},
@@ -268,7 +268,7 @@ async def test_turma_not_eligible_message_is_actionable(patches):
     )
     msg = response.json()["message"]
     assert "TD-2026-01" in msg          # turma do aluno
-    assert "IA-2026-02" in msg          # turma do exercício
+    assert "IA-2026-01" in msg          # turma do exercício
     assert "roster" in msg              # onde se conserta
     assert "autograde login" in msg     # e o que NÃO conserta
     assert "FAQ.md#turma_not_eligible" in msg

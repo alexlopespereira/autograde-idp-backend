@@ -141,10 +141,10 @@ def test_fetch_roster_caches_within_ttl(monkeypatch):
     "raw,esperado",
     [
         ("TD-2026-01", ("TD-2026-01",)),
-        ("TD-2026-01;IA-2026-02", ("TD-2026-01", "IA-2026-02")),
-        ("TD-2026-01, IA-2026-02", ("TD-2026-01", "IA-2026-02")),
-        ("TD-2026-01|IA-2026-02", ("TD-2026-01", "IA-2026-02")),
-        ("  TD-2026-01 ;; IA-2026-02  ", ("TD-2026-01", "IA-2026-02")),
+        ("TD-2026-01;IA-2026-01", ("TD-2026-01", "IA-2026-01")),
+        ("TD-2026-01, IA-2026-01", ("TD-2026-01", "IA-2026-01")),
+        ("TD-2026-01|IA-2026-01", ("TD-2026-01", "IA-2026-01")),
+        ("  TD-2026-01 ;; IA-2026-01  ", ("TD-2026-01", "IA-2026-01")),
         ("TD-2026-01;TD-2026-01", ("TD-2026-01",)),  # dedupe
         ("", ()),
     ],
@@ -156,11 +156,11 @@ def test_split_turmas(raw, esperado):
 def test_roster_entry_exposes_turmas():
     entries = roster.parse_roster(
         "email,nome,turma,github_username\n"
-        "aluno@idp.edu.br,Aluno,TD-2026-01;IA-2026-02,fulano\n"
+        "aluno@idp.edu.br,Aluno,TD-2026-01;IA-2026-01,fulano\n"
     )
     entry = entries["aluno@idp.edu.br"]
-    assert entry.turma == "TD-2026-01;IA-2026-02"  # coluna crua preservada
-    assert entry.turmas == ("TD-2026-01", "IA-2026-02")
+    assert entry.turma == "TD-2026-01;IA-2026-01"  # coluna crua preservada
+    assert entry.turmas == ("TD-2026-01", "IA-2026-01")
 
 
 def test_roster_still_rejects_empty_turma():

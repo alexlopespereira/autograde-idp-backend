@@ -198,7 +198,7 @@ def _bulletin_to_dict(b: Bulletin) -> dict[str, Any]:
 def _turma_for_exercise(user: Any, exercise: Exercise) -> str:
     """Turma que sera gravada na Sheet: a que casou com o exercicio.
 
-    Com a coluna `turma` aceitando varias turmas (`TD-2026-01;IA-2026-02`),
+    Com a coluna `turma` aceitando varias turmas (`TD-2026-01;IA-2026-01`),
     gravar a string crua misturaria os cursos no relatorio do professor.
     """
     match = [t for t in user.turmas if t in exercise.turmas]

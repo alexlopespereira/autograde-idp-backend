@@ -11,7 +11,7 @@ REQUIRED_COLUMNS = ("email", "nome", "turma", "github_username")
 # Separadores aceitos na coluna `turma`. Um aluno pode cursar mais de uma
 # disciplina servida pelo mesmo autograder (ex.: Transformação Digital E
 # Agentes de IA), e o roster tem uma linha por email — então a coluna precisa
-# comportar N turmas. `TD-2026-01;IA-2026-02` é o formato canônico.
+# comportar N turmas. `TD-2026-01;IA-2026-01` é o formato canônico.
 TURMA_SEPARATORS = ";,|"
 # Subset que precisa estar PREENCHIDO em cada linha. 'nome' e 'github_username'
 # podem chegar vazios no paste manual e ser completados depois via /me/profile.
@@ -26,7 +26,7 @@ class RosterValidationError(Exception):
 
 
 def split_turmas(raw: str) -> tuple[str, ...]:
-    """``"TD-2026-01;IA-2026-02"`` -> ``("TD-2026-01", "IA-2026-02")``.
+    """``"TD-2026-01;IA-2026-01"`` -> ``("TD-2026-01", "IA-2026-01")``.
 
     Uma turma só continua funcionando sem mudança nenhuma na planilha —
     é o caso de uma lista de um elemento. Dedupe preservando a ordem para
