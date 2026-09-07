@@ -42,7 +42,14 @@ class AuthenticatedUser:
 
     @property
     def turma(self) -> str:
-        return self.roster.turma
+        """Turma "principal" — a primeira da coluna. Ver :attr:`turmas`."""
+        turmas = self.roster.turmas
+        return turmas[0] if turmas else self.roster.turma
+
+    @property
+    def turmas(self) -> tuple[str, ...]:
+        """Todas as turmas do aluno (a coluna aceita ``TD-2026-01;IA-2026-01``)."""
+        return self.roster.turmas
 
 
 class AuthError(Exception):
@@ -60,7 +67,12 @@ def verify_google_id_token(token: str) -> GoogleUser:
     try:
         payload = id_token.verify_oauth2_token(token, google_requests.Request(), audience)
     except ValueError as exc:
-        raise AuthError(401, "invalid_token", str(exc)) from exc
+        raise AuthError(
+            401,
+            "invalid_token",
+            f"Seu token Google nao foi aceito ({exc}). Rode `autograde login` "
+            "para renovar a sessao.",
+        ) from exc
     email = payload.get("email")
     if not email:
         raise AuthError(401, "invalid_token", "no email claim in id_token")
@@ -101,11 +113,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return response
 
         auth_header = request.headers.get("authorization", "")
+        _no_auth = (
+            "Requisicao sem credencial. Rode `autograde login` e tente de novo."
+        )
         if not auth_header.lower().startswith("bearer "):
-            return _json_error(correlation_id, 401, "missing_authorization")
+            return _json_error(correlation_id, 401, "missing_authorization", _no_auth)
         token = auth_header[7:].strip()
         if not token:
-            return _json_error(correlation_id, 401, "missing_authorization")
+            return _json_error(correlation_id, 401, "missing_authorization", _no_auth)
 
         try:
             google_user = await asyncio.to_thread(verify_google_id_token, token)
@@ -121,11 +136,28 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 "roster_fetch_failed",
                 extra={"correlation_id": correlation_id, "error": str(exc)},
             )
-            return _json_error(correlation_id, 502, "roster_unavailable")
+            return _json_error(
+                correlation_id,
+                502,
+                "roster_unavailable",
+                "O backend nao conseguiu ler a planilha da turma. E um "
+                "problema do servidor, nao seu — tente de novo em alguns "
+                "minutos e avise o professor se persistir.",
+            )
 
         entry = roster.get(google_user.email)
         if entry is None:
-            return _json_error(correlation_id, 403, "not_in_roster")
+            return _json_error(
+                correlation_id,
+                403,
+                "not_in_roster",
+                f"O email {google_user.email} nao esta na planilha da turma. "
+                "Causa mais comum: voce fez `autograde login` com uma conta "
+                "Google diferente da que o professor cadastrou (ex.: gmail "
+                "pessoal no lugar do email institucional). Rode `autograde "
+                "login` de novo e escolha a conta certa; se o email estiver "
+                "certo, peca ao professor para incluir voce no roster.",
+            )
 
         request.state.user = AuthenticatedUser(google=google_user, roster=entry)
         logger.info(

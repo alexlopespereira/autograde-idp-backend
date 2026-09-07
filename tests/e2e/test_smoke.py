@@ -409,6 +409,6 @@ def test_smoke_multi_turma_blocks_mba_aluno(
         timeout=10,
     )
     assert resp.status_code == 403, resp.text
-    assert resp.json() == {"error": "turma_not_eligible"}
+    assert resp.json()["error"] == "turma_not_eligible"
 
 

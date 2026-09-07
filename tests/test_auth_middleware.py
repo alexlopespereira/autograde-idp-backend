@@ -102,7 +102,7 @@ async def test_valid_token_and_in_roster_returns_200(patch_auth) -> None:
 async def test_missing_header_returns_401(patch_auth) -> None:
     response = await _request(_make_app(), "/protected")
     assert response.status_code == 401
-    assert response.json() == {"error": "missing_authorization"}
+    assert response.json()["error"] == "missing_authorization"
 
 
 @pytest.mark.asyncio
@@ -111,7 +111,7 @@ async def test_malformed_header_returns_401(patch_auth) -> None:
         _make_app(), "/protected", headers={"Authorization": "Token abc"}
     )
     assert response.status_code == 401
-    assert response.json() == {"error": "missing_authorization"}
+    assert response.json()["error"] == "missing_authorization"
 
 
 @pytest.mark.asyncio
@@ -137,7 +137,7 @@ async def test_token_valid_but_not_in_roster_returns_403(patch_auth) -> None:
         _make_app(), "/protected", headers={"Authorization": f"Bearer {token}"}
     )
     assert response.status_code == 403
-    assert response.json() == {"error": "not_in_roster"}
+    assert response.json()["error"] == "not_in_roster"
 
 
 @pytest.mark.asyncio
@@ -184,7 +184,7 @@ async def test_roster_fetch_failure_returns_502_without_leaking_url(monkeypatch)
         _make_app(), "/protected", headers={"Authorization": f"Bearer {token}"}
     )
     assert response.status_code == 502
-    assert response.json() == {"error": "roster_unavailable"}
+    assert response.json()["error"] == "roster_unavailable"
     body_text = response.text
     assert "SECRET-SHEET-ID-12345" not in body_text
     assert "spreadsheets/d/" not in body_text

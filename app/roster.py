@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, TypeVar
 
 REQUIRED_COLUMNS = ("email", "nome", "turma", "github_username")
+# Separadores aceitos na coluna `turma`. Um aluno pode cursar mais de uma
+# disciplina servida pelo mesmo autograder (ex.: Transformação Digital E
+# Agentes de IA), e o roster tem uma linha por email — então a coluna precisa
+# comportar N turmas. `TD-2026-01;IA-2026-01` é o formato canônico.
+TURMA_SEPARATORS = ";,|"
 # Subset que precisa estar PREENCHIDO em cada linha. 'nome' e 'github_username'
 # podem chegar vazios no paste manual e ser completados depois via /me/profile.
 REQUIRED_NONEMPTY_COLUMNS = ("email", "turma")
@@ -19,12 +25,34 @@ class RosterValidationError(Exception):
     """Raised when a roster CSV violates schema or uniqueness constraints."""
 
 
+def split_turmas(raw: str) -> tuple[str, ...]:
+    """``"TD-2026-01;IA-2026-01"`` -> ``("TD-2026-01", "IA-2026-01")``.
+
+    Uma turma só continua funcionando sem mudança nenhuma na planilha —
+    é o caso de uma lista de um elemento. Dedupe preservando a ordem para
+    que a primeira turma continue sendo a "principal" (a que vai pra coluna
+    `turma` da Submissions Sheet quando nada mais desempata).
+    """
+    pattern = "[" + re.escape(TURMA_SEPARATORS) + "]"
+    out: list[str] = []
+    for part in re.split(pattern, raw or ""):
+        turma = part.strip()
+        if turma and turma not in out:
+            out.append(turma)
+    return tuple(out)
+
+
 @dataclass(frozen=True)
 class RosterEntry:
     email: str
     nome: str
     turma: str
     github_username: str
+
+    @property
+    def turmas(self) -> tuple[str, ...]:
+        """Turmas do aluno, já separadas. Ver :func:`split_turmas`."""
+        return split_turmas(self.turma)
 
 
 def parse_roster(csv_text: str) -> dict[str, RosterEntry]:
