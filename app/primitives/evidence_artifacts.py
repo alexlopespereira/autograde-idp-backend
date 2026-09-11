@@ -215,3 +215,316 @@ def cross_reference_required(args: dict, evidence: dict) -> CriterioResult:
         peso,
         f"{len(matches_a)} termo(s) de {role_a!r} confirmados em {role_b!r}",
     )
+
+
+# ---------------------------------------------------------------------------
+# Checagens genéricas de conteúdo (regex e CSV)
+#
+# Deliberadamente genéricas: a especificidade do exercício (qual regex, quais
+# colunas, qual soma) mora no YAML, não aqui. Ver "conteúdo de exercício mora
+# no YAML" no CLAUDE.md.
+# ---------------------------------------------------------------------------
+
+_REGEX_FLAGS = {
+    "i": re.IGNORECASE,
+    "m": re.MULTILINE,
+    "s": re.DOTALL,
+    "x": re.VERBOSE,
+}
+
+
+def _compile_arg(args: dict) -> "re.Pattern[str] | str":
+    """Compila ``args.pattern`` com ``args.flags`` (ex.: ``flags: im``).
+
+    Devolve string (a mensagem de erro) quando a regex é inválida — o chamador
+    reprova o critério em vez de estourar exceção.
+    """
+    pattern = _str_arg(args, "pattern")
+    if not pattern:
+        return "args.pattern obrigatório"
+    flags = 0
+    for ch in _str_arg(args, "flags"):
+        flags |= _REGEX_FLAGS.get(ch.lower(), 0)
+    try:
+        return re.compile(pattern, flags)
+    except re.error as exc:
+        return f"regex inválida: {exc}"
+
+
+def _content_of(evidence: dict, role: str) -> tuple[str, str]:
+    """``(content, erro)`` — ``erro`` não-vazio quando o artefato falta."""
+    entry = _artifact_by_role(evidence, role)
+    if entry is None or not entry.get("exists"):
+        return "", f"artefato {role!r} ausente"
+    return str(entry.get("content", "")), ""
+
+
+@register("evidence.artifacts.content_matches")
+def content_matches(args: dict, evidence: dict) -> CriterioResult:
+    """Conta ocorrências de ``args.pattern`` no conteúdo do artefato.
+
+    args: ``{role, pattern, min=1, flags="", descricao=""}``
+
+    É o canivete suíço do YAML: "o ralph.sh tem `set -euo pipefail`", "o
+    index.html tem um `<canvas>`", "o plugin-list.txt cita `grill-me`". A
+    ``descricao`` é o que aparece no boletim — escreva pensando no aluno.
+    """
+    peso = _peso(args)
+    role = _str_arg(args, "role")
+    minimo = _int_arg(args, "min", 1)
+    descricao = _str_arg(args, "descricao") or f"padrão {_str_arg(args, 'pattern')!r}"
+    regex = _compile_arg(args)
+    if isinstance(regex, str):
+        return CriterioResult(False, 0, peso, regex)
+    content, erro = _content_of(evidence, role)
+    if erro:
+        return CriterioResult(False, 0, peso, erro)
+    n = len(regex.findall(content))
+    if n >= minimo:
+        return CriterioResult(True, peso, peso, f"{descricao}: {n} ocorrência(s)")
+    return CriterioResult(
+        False, 0, peso, f"{descricao}: {n} ocorrência(s), esperado >= {minimo}"
+    )
+
+
+@register("evidence.artifacts.content_absent")
+def content_absent(args: dict, evidence: dict) -> CriterioResult:
+    """Reprova se ``args.pattern`` aparecer — o inverso do ``content_matches``.
+
+    args: ``{role, pattern, flags="", descricao=""}``. Uso: garantir que um
+    template não foi entregue com os placeholders por preencher.
+    """
+    peso = _peso(args)
+    role = _str_arg(args, "role")
+    descricao = _str_arg(args, "descricao") or f"padrão {_str_arg(args, 'pattern')!r}"
+    regex = _compile_arg(args)
+    if isinstance(regex, str):
+        return CriterioResult(False, 0, peso, regex)
+    content, erro = _content_of(evidence, role)
+    if erro:
+        return CriterioResult(False, 0, peso, erro)
+    hits = regex.findall(content)
+    if not hits:
+        return CriterioResult(True, peso, peso, f"{descricao}: ausente, como esperado")
+    return CriterioResult(
+        False, 0, peso, f"{descricao}: {len(hits)} ocorrência(s) — deveria estar ausente"
+    )
+
+
+@register("evidence.artifacts.line_count_min")
+def line_count_min(args: dict, evidence: dict) -> CriterioResult:
+    """Conta linhas NÃO vazias do artefato. args: ``{role, min, max=0}``.
+
+    ``max=0`` desliga o teto. Usado para "5–10 linhas de reflexão": o piso é
+    duro, o teto é generoso de propósito (ver comentário no YAML).
+    """
+    peso = _peso(args)
+    role = _str_arg(args, "role")
+    minimo = _int_arg(args, "min", 1)
+    maximo = _int_arg(args, "max", 0)
+    content, erro = _content_of(evidence, role)
+    if erro:
+        return CriterioResult(False, 0, peso, erro)
+    linhas = [ln for ln in content.splitlines() if ln.strip()]
+    n = len(linhas)
+    if n < minimo:
+        return CriterioResult(
+            False, 0, peso, f"{n} linha(s) não vazia(s), esperado >= {minimo}"
+        )
+    if maximo and n > maximo:
+        return CriterioResult(
+            False, 0, peso, f"{n} linha(s) não vazia(s), esperado <= {maximo}"
+        )
+    return CriterioResult(True, peso, peso, f"{n} linha(s) não vazia(s)")
+
+
+# --- CSV -------------------------------------------------------------------
+
+
+def _parse_csv(content: str, delimiter: str) -> list[list[str]]:
+    """Lê o CSV do artefato. Tolera BOM e linhas em branco no meio/fim."""
+    import csv
+    import io
+
+    text = content.lstrip("﻿")
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+    return [row for row in reader if any((cell or "").strip() for cell in row)]
+
+
+def _csv_of(args: dict, evidence: dict) -> tuple[list[list[str]], str]:
+    role = _str_arg(args, "role")
+    delimiter = _str_arg(args, "delimiter") or ","
+    if len(delimiter) != 1:
+        return [], f"args.delimiter precisa ter 1 caractere, recebi {delimiter!r}"
+    content, erro = _content_of(evidence, role)
+    if erro:
+        return [], erro
+    try:
+        rows = _parse_csv(content, delimiter)
+    except Exception as exc:  # noqa: BLE001 - csv.Error e afins viram mensagem
+        return [], f"CSV ilegível em {role!r}: {exc}"
+    if not rows:
+        return [], f"CSV {role!r} está vazio"
+    return rows, ""
+
+
+def _norm(cell: str) -> str:
+    return (cell or "").strip().strip('"').lower()
+
+
+@register("evidence.artifacts.csv_columns")
+def csv_columns(args: dict, evidence: dict) -> CriterioResult:
+    """Confere o cabeçalho do CSV. args: ``{role, columns[], delimiter, exact}``.
+
+    ``exact: true`` exige o cabeçalho idêntico (mesmas colunas, mesma ordem);
+    o default exige apenas que as colunas pedidas estejam presentes, o que
+    deixa o aluno acrescentar colunas próprias sem quebrar a nota.
+    """
+    peso = _peso(args)
+    esperadas = [str(c) for c in (args.get("columns") or [])]
+    if not esperadas:
+        return CriterioResult(False, 0, peso, "args.columns obrigatório")
+    rows, erro = _csv_of(args, evidence)
+    if erro:
+        return CriterioResult(False, 0, peso, erro)
+    header = [_norm(c) for c in rows[0]]
+    alvo = [_norm(c) for c in esperadas]
+    if bool(args.get("exact")):
+        if header == alvo:
+            return CriterioResult(True, peso, peso, f"cabeçalho exato: {rows[0]}")
+        return CriterioResult(
+            False,
+            0,
+            peso,
+            f"cabeçalho {rows[0]} difere do esperado {esperadas} (a ordem conta)",
+        )
+    faltando = [orig for orig, n in zip(esperadas, alvo) if n not in header]
+    if faltando:
+        return CriterioResult(
+            False, 0, peso, f"colunas faltando: {faltando} (cabeçalho lido: {rows[0]})"
+        )
+    return CriterioResult(True, peso, peso, f"{len(esperadas)} coluna(s) presentes")
+
+
+@register("evidence.artifacts.csv_rows_min")
+def csv_rows_min(args: dict, evidence: dict) -> CriterioResult:
+    """Conta linhas de dados (exclui o cabeçalho). args: ``{role, min, delimiter}``."""
+    peso = _peso(args)
+    minimo = _int_arg(args, "min", 1)
+    rows, erro = _csv_of(args, evidence)
+    if erro:
+        return CriterioResult(False, 0, peso, erro)
+    n = len(rows) - 1
+    if n >= minimo:
+        return CriterioResult(True, peso, peso, f"{n} linha(s) de dados (>= {minimo})")
+    return CriterioResult(False, 0, peso, f"{n} linha(s) de dados, esperado >= {minimo}")
+
+
+@register("evidence.artifacts.csv_shape")
+def csv_shape(args: dict, evidence: dict) -> CriterioResult:
+    """Confere a forma exata do CSV. args: ``{role, rows, cols, delimiter}``.
+
+    ``rows`` = linhas de dados (sem cabeçalho); ``cols`` = campos do cabeçalho.
+    Para o pivot região x mês do ia-3.1: ``rows: 4`` e ``cols: 7`` (a coluna
+    ``regiao`` mais os 6 meses).
+    """
+    peso = _peso(args)
+    rows_esperado = _int_arg(args, "rows", -1)
+    cols_esperado = _int_arg(args, "cols", -1)
+    rows, erro = _csv_of(args, evidence)
+    if erro:
+        return CriterioResult(False, 0, peso, erro)
+    n_rows = len(rows) - 1
+    n_cols = len(rows[0])
+    problemas = []
+    if rows_esperado >= 0 and n_rows != rows_esperado:
+        problemas.append(f"{n_rows} linhas de dados (esperado {rows_esperado})")
+    if cols_esperado >= 0 and n_cols != cols_esperado:
+        problemas.append(f"{n_cols} colunas (esperado {cols_esperado})")
+    if problemas:
+        return CriterioResult(False, 0, peso, "; ".join(problemas))
+    return CriterioResult(True, peso, peso, f"forma {n_rows}x{n_cols} confere")
+
+
+def _to_float(cell: str) -> float | None:
+    """Converte célula em float aceitando ``1.234,56`` e ``1234.56``.
+
+    Célula vazia ou não numérica devolve ``None`` e é ignorada na soma — num
+    pivot, as colunas de rótulo caem aqui sem virar erro.
+    """
+    text = (cell or "").strip().replace("R$", "").replace(" ", "")
+    if not text:
+        return None
+    if "," in text:
+        # "1.234,56" -> ponto é separador de milhar; "1234,56" -> só a vírgula.
+        text = text.replace(".", "").replace(",", ".")
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+@register("evidence.artifacts.csv_sum_equals")
+def csv_sum_equals(args: dict, evidence: dict) -> CriterioResult:
+    """Soma células numéricas do CSV e compara com ``args.expected``.
+
+    args: ``{role, expected, tolerance=0.05, columns=[], skip_first_col=false,
+    delimiter}``
+
+    Sem ``columns``, soma toda célula que parseia como número — o que, num
+    pivot, é exatamente o total geral. ``skip_first_col`` protege pivots cuja
+    primeira coluna é um rótulo que por acaso parece número.
+    """
+    peso = _peso(args)
+    if "expected" not in args:
+        return CriterioResult(False, 0, peso, "args.expected obrigatório")
+    try:
+        esperado = float(args["expected"])
+    except (TypeError, ValueError):
+        return CriterioResult(
+            False, 0, peso, f"args.expected inválido: {args.get('expected')!r}"
+        )
+    try:
+        tolerancia = float(args.get("tolerance", 0.05))
+    except (TypeError, ValueError):
+        tolerancia = 0.05
+    rows, erro = _csv_of(args, evidence)
+    if erro:
+        return CriterioResult(False, 0, peso, erro)
+
+    header = [_norm(c) for c in rows[0]]
+    alvos = [_norm(str(c)) for c in (args.get("columns") or [])]
+    if alvos:
+        idxs = [i for i, h in enumerate(header) if h in alvos]
+        if not idxs:
+            return CriterioResult(
+                False, 0, peso, f"nenhuma das colunas {args.get('columns')} no cabeçalho"
+            )
+    else:
+        inicio = 1 if bool(args.get("skip_first_col")) else 0
+        idxs = list(range(inicio, len(header)))
+
+    total = 0.0
+    lidas = 0
+    for row in rows[1:]:
+        for i in idxs:
+            if i >= len(row):
+                continue
+            valor = _to_float(row[i])
+            if valor is None:
+                continue
+            total += valor
+            lidas += 1
+    if lidas == 0:
+        return CriterioResult(False, 0, peso, "nenhuma célula numérica encontrada")
+    if abs(total - esperado) <= tolerancia:
+        return CriterioResult(
+            True, peso, peso, f"soma {total:.2f} confere com {esperado:.2f}"
+        )
+    return CriterioResult(
+        False,
+        0,
+        peso,
+        f"soma {total:.2f} difere do esperado {esperado:.2f} "
+        f"(tolerância +/-{tolerancia}); {lidas} célula(s) somadas",
+    )

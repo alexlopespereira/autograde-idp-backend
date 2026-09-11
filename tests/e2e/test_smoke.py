@@ -326,7 +326,12 @@ def test_smoke_ex_1_2_with_gh_mock(
     monkeypatch.setattr(cli_shell.shutil, "which", lambda _b: "/fake/bin/gh")
 
     def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
-        joined = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        # O CLI invoca pelo caminho resolvido por shutil.which (argv[0] =
+        # "/fake/bin/gh"), nao pelo nome nu; normaliza antes de despachar.
+        if isinstance(cmd, list):
+            joined = " ".join([cmd[0].rsplit("/", 1)[-1], *cmd[1:]])
+        else:
+            joined = str(cmd)
         if joined == "gh --version":
             stdout = "gh version 2.40.1 (2024-01-01)\n"
         elif joined.startswith("gh auth status"):

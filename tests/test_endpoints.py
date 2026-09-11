@@ -1455,3 +1455,97 @@ def test_bulletin_to_dict_judge_degraded_false_when_all_ok() -> None:
     )
     d = endpoints_module._bulletin_to_dict(b)
     assert d["judge_degraded"] is False
+
+
+# --- requer_repositorio: false -------------------------------------------
+# Exercício declarado sem repositório não tem `repo_url`: o CLI não lê o
+# remote e não manda o campo. O backend então não parseia URL, não confere
+# dono e não chama a API do GitHub. A identidade vem do login Google + roster
+# (e do `gh auth status`, quando o YAML pede).
+
+
+def _make_exercise_sem_repo() -> Exercise:
+    ex = _make_exercise()
+    return Exercise(
+        id=ex.id,
+        titulo=ex.titulo,
+        turmas=ex.turmas,
+        disponivel_a_partir_de=ex.disponivel_a_partir_de,
+        prazo=ex.prazo,
+        criterios=ex.criterios,
+        requer_repositorio=False,
+    )
+
+
+@dataclass
+class ExplodingGitHub:
+    """Qualquer chamada à API do GitHub é um bug quando não há repositório."""
+
+    def collect_evidence(self, repo_url: str) -> dict[str, Any]:
+        raise AssertionError(
+            f"collect_evidence({repo_url!r}) nao deveria ser chamado sem repositorio"
+        )
+
+
+@pytest.mark.asyncio
+async def test_grade_preview_sem_repo_dispensa_repo_url(patches) -> None:
+    _patch_endpoints(patches, exercise=_make_exercise_sem_repo())
+    patches.setattr(endpoints_module, "get_github_client", lambda: ExplodingGitHub())
+    response = await _post(_make_app(), "/grade-preview", {"exercicio": "1.1"})
+    assert response.status_code == 200
+    assert response.json()["bulletin"]["total"] == 60
+
+
+@pytest.mark.asyncio
+async def test_grade_preview_sem_repo_ignora_repo_de_terceiro(patches) -> None:
+    # CLI antiga pode mandar o remote do diretório mesmo quando o exercício
+    # dispensa repo. Sem a exigência, o dono do repo deixa de ser assunto —
+    # o que importaria seria 403 num exercício que nem olha para o GitHub.
+    _patch_endpoints(patches, exercise=_make_exercise_sem_repo())
+    patches.setattr(endpoints_module, "get_github_client", lambda: ExplodingGitHub())
+    response = await _post(
+        _make_app(),
+        "/grade-preview",
+        {"exercicio": "1.1", "repo_url": "https://github.com/outra-pessoa/projeto"},
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_grade_preview_sem_repo_nao_coleta_first_commit(patches) -> None:
+    captured: dict[str, Any] = {}
+
+    _patch_endpoints(patches, exercise=_make_exercise_sem_repo())
+    patches.setattr(endpoints_module, "get_github_client", lambda: ExplodingGitHub())
+
+    real_grade = endpoints_module.grade
+
+    def capture(exercise, evidence):
+        captured["evidence"] = evidence
+        return real_grade(exercise, evidence)
+
+    patches.setattr(endpoints_module, "grade", capture)
+    response = await _post(_make_app(), "/grade-preview", {"exercicio": "1.1"})
+    assert response.status_code == 200
+    assert captured["evidence"]["file_first_commit"] == {}
+    assert "repo_exists" not in captured["evidence"]
+
+
+@pytest.mark.asyncio
+async def test_grade_preview_com_repo_exige_repo_url(patches) -> None:
+    # O default continua valendo: exercício de git sem `repo_url` é erro claro,
+    # não um 500 nem uma nota zero silenciosa.
+    _patch_endpoints(patches)
+    response = await _post(_make_app(), "/grade-preview", {"exercicio": "1.1"})
+    assert response.status_code == 400
+    assert response.json()["error"] == "repo_url_required"
+
+
+@pytest.mark.asyncio
+async def test_grade_preview_com_repo_url_vazia_exige_repo(patches) -> None:
+    _patch_endpoints(patches)
+    response = await _post(
+        _make_app(), "/grade-preview", {"exercicio": "1.1", "repo_url": "   "}
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "repo_url_required"

@@ -607,3 +607,71 @@ def tobe_improvements(args: dict, evidence: dict) -> CriterioResult:
     )
     label = f"{role_tobe}+{role_asis}"
     return _materialize(peso, label, _call_judge(rubrica, label, combined_entry))
+
+
+# ---------------------------------------------------------------------------
+# Primitive: rubric (judge genérico, rubrica no YAML)
+# ---------------------------------------------------------------------------
+
+
+@register("judge.artifacts.rubric")
+def rubric(args: dict, evidence: dict) -> CriterioResult:
+    """Judge genérico: a rubrica inteira vem do YAML do exercício.
+
+    args: ``{role | roles[], rubrica, sub_criterios[]}``
+
+    Os judges acima nasceram um por critério do 2.1 e envelheceram mal: cada
+    exercício novo pedia um primitive novo e um deploy do backend. Aqui a
+    especificidade fica onde ela pertence — no YAML — e o backend só orquestra.
+    Prefira este para critério novo; os específicos ficam pelos exercícios que
+    já dependem deles.
+
+    Com ``roles`` (≥2) os artefatos são concatenados com marcadores, do mesmo
+    jeito que ``actor_map_quality`` faz com mapa + transcript.
+    """
+    peso = _peso(args)
+    rubrica_yaml = _str_arg(args, "rubrica").strip()
+    sub_criterios = _list_arg(args, "sub_criterios")
+    if not rubrica_yaml and not sub_criterios:
+        return CriterioResult(
+            False, 0, peso, "args.rubrica ou args.sub_criterios obrigatório"
+        )
+
+    roles = _list_arg(args, "roles") or [_str_arg(args, "role")]
+    roles = [r for r in roles if r]
+    if not roles:
+        return CriterioResult(False, 0, peso, "args.role ou args.roles obrigatório")
+
+    entries = []
+    for role in roles:
+        entry = _artifact_by_role(evidence, role)
+        if entry is None or not entry.get("exists"):
+            return _miss_artifact(peso, role)
+        entries.append((role, entry))
+
+    partes = [rubrica_yaml] if rubrica_yaml else []
+    if sub_criterios:
+        bullets = "\n".join(f"- {c}" for c in sub_criterios)
+        partes.append(
+            "O artefato deve atender a TODOS os sub-critérios abaixo; o score é "
+            "proporcional a quantos ele atende de forma substantiva (não "
+            f"cosmética):\n{bullets}"
+        )
+    partes.append(
+        "Score:\n"
+        "- 1.0: atende tudo de forma substantiva\n"
+        "- 0.5: atende parcialmente ou de forma vaga\n"
+        "- 0.0: não atende, ou é genérico/evasivo a ponto de não dar para "
+        "verificar"
+    )
+    rubrica_text = "\n\n".join(partes)
+
+    if len(entries) == 1:
+        role, entry = entries[0]
+        return _materialize(peso, role, _call_judge(rubrica_text, role, entry))
+
+    role_label = "+".join(role for role, _ in entries)
+    combined = _concat_entry(*entries)
+    return _materialize(
+        peso, role_label, _call_judge(rubrica_text, role_label, combined)
+    )

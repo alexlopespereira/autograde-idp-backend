@@ -215,3 +215,202 @@ def commits_last_within(args: dict, evidence: dict) -> CriterioResult:
         if ts >= cutoff:
             return CriterioResult(True, peso, peso, f"commit dentro de {duration_raw}")
     return CriterioResult(False, 0, peso, f"nenhum commit nas ultimas {duration_raw}")
+
+
+# ---------------------------------------------------------------------------
+# Checagens sobre o repositório que não cabiam nas primitives de arquivo único
+# ---------------------------------------------------------------------------
+
+
+@register("github.repo.files_matching_min")
+def repo_files_matching_min(args: dict, evidence: dict) -> CriterioResult:
+    """Conta arquivos do repo cujo path casa o glob ``args.pattern``.
+
+    args: ``{pattern, min=1, descricao=""}``
+
+    Existe porque ``github.repo.has_file`` exige o path exato, e boa parte do
+    enunciado pede "uma pasta ``tests/`` com pelo menos 4 casos" — o nome dos
+    arquivos é escolha do aluno.
+    """
+    peso = _peso(args)
+    pattern = str(args.get("pattern") or "")
+    if not pattern:
+        return CriterioResult(False, 0, peso, "args.pattern obrigatorio")
+    try:
+        minimo = int(args.get("min", 1))
+    except (TypeError, ValueError):
+        return CriterioResult(False, 0, peso, f"args.min invalido: {args.get('min')!r}")
+    descricao = str(args.get("descricao") or f"arquivos casando '{pattern}'")
+    files = evidence.get("files_list") or []
+    hits = [f for f in files if isinstance(f, str) and fnmatch.fnmatch(f, pattern)]
+    if len(hits) >= minimo:
+        return CriterioResult(True, peso, peso, f"{descricao}: {len(hits)}")
+    return CriterioResult(
+        False, 0, peso, f"{descricao}: {len(hits)}, esperado >= {minimo}"
+    )
+
+
+@register("github.commits.message_pattern_count")
+def commits_message_pattern_count(args: dict, evidence: dict) -> CriterioResult:
+    """Conta commits cuja mensagem casa ``args.pattern``.
+
+    args: ``{pattern, min=1, descricao=""}``
+
+    Só enxerga os ``MAX_COMMITS_COLLECTED`` commits mais recentes (ver
+    ``github_client``) — o suficiente para "pelo menos N commits 'ralph: iter
+    <n>'", que é o uso previsto.
+    """
+    peso = _peso(args)
+    pattern = str(args.get("pattern") or "")
+    if not pattern:
+        return CriterioResult(False, 0, peso, "args.pattern obrigatorio")
+    try:
+        regex = re.compile(pattern, re.IGNORECASE | re.MULTILINE)
+    except re.error as exc:
+        return CriterioResult(False, 0, peso, f"regex invalida: {exc}")
+    try:
+        minimo = int(args.get("min", 1))
+    except (TypeError, ValueError):
+        return CriterioResult(False, 0, peso, f"args.min invalido: {args.get('min')!r}")
+    descricao = str(args.get("descricao") or f"commits casando {pattern!r}")
+    commits = evidence.get("commits") or []
+    hits = [
+        c
+        for c in commits
+        if isinstance(c, dict) and regex.search(str(c.get("message") or ""))
+    ]
+    if len(hits) >= minimo:
+        return CriterioResult(True, peso, peso, f"{descricao}: {len(hits)}")
+    return CriterioResult(
+        False,
+        0,
+        peso,
+        f"{descricao}: {len(hits)}, esperado >= {minimo} "
+        f"({len(commits)} commits inspecionados)",
+    )
+
+
+# Nomes de arquivo que quase sempre carregam segredo. Checagem por NOME, não
+# por conteúdo: o evidence traz a árvore do repo, não os bytes de cada blob.
+# Um `.env` versionado é o erro comum de verdade; chave colada dentro do
+# `config.py` escapa daqui e fica pro code review humano.
+_SECRET_FILE_PATTERNS: tuple[str, ...] = (
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx",
+    "*id_rsa",
+    "*id_dsa",
+    "*id_ecdsa",
+    "*id_ed25519",
+    ".env",
+    "*/.env",
+    ".env.*",
+    "*/.env.*",
+    "*credentials.json",
+    "*service-account*.json",
+    "*secrets.y*ml",
+    "*.pypirc",
+    "*.npmrc",
+)
+# Falsos positivos frequentes e inofensivos: exemplos e templates.
+_SECRET_ALLOW_PATTERNS: tuple[str, ...] = (
+    "*.env.example",
+    "*.env.sample",
+    "*.env.template",
+    "*.example",
+    "*.sample",
+    "*.template",
+)
+
+
+@register("github.repo.no_secret_files")
+def repo_no_secret_files(args: dict, evidence: dict) -> CriterioResult:
+    """Reprova se a árvore do repo tiver arquivo com cara de segredo.
+
+    args: ``{extra=[], allow=[]}`` — globs somados às listas padrão.
+    """
+    peso = _peso(args)
+    extra = [str(p) for p in (args.get("extra") or [])]
+    allow = [str(p) for p in (args.get("allow") or [])]
+    padroes = _SECRET_FILE_PATTERNS + tuple(extra)
+    permitidos = _SECRET_ALLOW_PATTERNS + tuple(allow)
+    files = [f for f in (evidence.get("files_list") or []) if isinstance(f, str)]
+    if not files:
+        return CriterioResult(True, peso, peso, "repo sem arquivos para inspecionar")
+    suspeitos = []
+    for f in files:
+        if any(fnmatch.fnmatch(f, ok) for ok in permitidos):
+            continue
+        if any(fnmatch.fnmatch(f, pat) for pat in padroes):
+            suspeitos.append(f)
+    if suspeitos:
+        preview = ", ".join(suspeitos[:5])
+        mais = f" (+{len(suspeitos) - 5})" if len(suspeitos) > 5 else ""
+        return CriterioResult(
+            False,
+            0,
+            peso,
+            f"arquivo(s) com cara de segredo versionado(s): {preview}{mais}. "
+            f"Remova do historico e adicione ao .gitignore.",
+        )
+    return CriterioResult(
+        True, peso, peso, f"nenhum arquivo suspeito entre {len(files)} do repo"
+    )
+
+
+@register("github.file.first_commit_before")
+def file_first_commit_before(args: dict, evidence: dict) -> CriterioResult:
+    """Garante que ``args.path_a`` entrou no repo ANTES de ``args.path_b``.
+
+    args: ``{path_a, path_b, descricao=""}``
+
+    Serve para checar ordem de trabalho, não só existência: "o transcript do
+    grill-me foi commitado antes do protocolo" prova que o protocolo saiu da
+    sessão, e não o contrário. Consome ``evidence['file_first_commit']``, que
+    o endpoint popula só para os paths citados aqui.
+    """
+    peso = _peso(args)
+    path_a = str(args.get("path_a") or "")
+    path_b = str(args.get("path_b") or "")
+    if not path_a or not path_b:
+        return CriterioResult(False, 0, peso, "args.path_a e args.path_b obrigatorios")
+    descricao = str(args.get("descricao") or f"'{path_a}' antes de '{path_b}'")
+    mapa = evidence.get("file_first_commit")
+    if not isinstance(mapa, dict):
+        return CriterioResult(
+            False, 0, peso, "datas de primeiro commit nao coletadas para este exercicio"
+        )
+    raw_a = mapa.get(path_a)
+    raw_b = mapa.get(path_b)
+    if not raw_a:
+        return CriterioResult(
+            False, 0, peso, f"'{path_a}' nao tem commit no historico do repo"
+        )
+    if not raw_b:
+        return CriterioResult(
+            False, 0, peso, f"'{path_b}' nao tem commit no historico do repo"
+        )
+    try:
+        dt_a = _parse_iso(str(raw_a))
+        dt_b = _parse_iso(str(raw_b))
+    except ValueError as exc:
+        return CriterioResult(False, 0, peso, f"data de commit invalida: {exc}")
+    if dt_a < dt_b:
+        return CriterioResult(
+            True, peso, peso, f"{descricao}: OK ({dt_a.date()} < {dt_b.date()})"
+        )
+    if dt_a == dt_b:
+        return CriterioResult(
+            False,
+            0,
+            peso,
+            f"{descricao}: os dois entraram no MESMO commit — "
+            f"commite o primeiro antes de escrever o segundo",
+        )
+    return CriterioResult(
+        False,
+        0,
+        peso,
+        f"{descricao}: fora de ordem ({dt_a.date()} veio depois de {dt_b.date()})",
+    )

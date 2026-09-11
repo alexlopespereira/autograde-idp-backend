@@ -24,7 +24,7 @@ Variáveis de ambiente obrigatórias (ver README.md): `GOOGLE_OAUTH_CLIENT_ID`, 
 
 Um deployment e uma Submissions Sheet servem N cursos. O curso é derivado do **prefixo do id do exercício**: `ia-1.1` → curso `ia`; sem prefixo → `td` (Transformação Digital, legado). Isso resolve de uma vez a agregação (`/me/grades` agrega por `exercicio`, e `ia-1.1` != `1.1`), o roteamento (`EXERCISES_BASE_URL_<CURSO>` → `EXERCISES_BASE_URL`) e a coluna `curso` (T) da Sheet, que é derivada — não digitada.
 
-Ao adicionar curso: prefixo de 2–8 letras minúsculas, YAMLs nomeados com o id completo (`ia-1.1.yaml`, `exercicio: "ia-1.1"`), env var nova nos 3 lugares de sempre, e — se reaproveitar exercício com evidência shell — registrar o id qualificado em `app/evidence/shell.py:_WHITELIST`. O CLI espelha tudo em `autograde_idp/curso.py`.
+Ao adicionar curso: prefixo de 2–8 letras minúsculas, YAMLs nomeados com o id completo (`ia-1.1.yaml`, `exercicio: "ia-1.1"`), env var nova nos 3 lugares de sempre, e — se reaproveitar exercício **legado** com evidência shell — registrar o id qualificado em `app/evidence/shell.py:_WHITELIST`. Exercício novo não precisa: declare `comandos_shell:` no YAML e a whitelist sai dali (`_WHITELIST` é só o fallback dos que já estão no ar). O CLI espelha tudo em `autograde_idp/curso.py`.
 
 Deploy: `gcloud builds submit --config=cloudbuild.yaml --substitutions=...`. CI workflow `cloud-run-deploy.yml` é **`workflow_dispatch` only** — não habilitar `on: push` sem confirmação (turma ativa). Quando atualizar deploy, manter `cloudbuild.yaml` e `.github/workflows/cloud-run-deploy.yml` em sync (env vars + secrets espelhados).
 
@@ -37,7 +37,8 @@ Deploy: `gcloud builds submit --config=cloudbuild.yaml --substitutions=...`. CI 
 ```
 load_exercise(id) → curso.split_exercise_id(id) → base URL do curso → fetch YAML → parse_exercise_yaml
   → checa janela (disponivel_a_partir_de) e turma
-  → parse_repo_url + checa owner == user.github_username
+  → se requer_repositorio (default): parse_repo_url + checa owner == user.github_username
+    (se false: owner_repo="" e nada do GitHub abaixo roda)
   → validate_shell_evidence (whitelist por exercício, clock-skew ±30min)
   → github_client.collect_evidence (PyGithub + retry rate-limit)
   → grader.grade → percorre exercise.criterios e despacha cada um pro primitive registrado
@@ -84,7 +85,8 @@ Qualquer estrutura específica de exercício (paths de artefatos, comandos shell
 - `criterios:` — rubrica (despachada por `app/grader.py` ao primitive registrado em `app/primitives/`).
 - `perguntas:` — perguntas open-ended graded pelo Gemini (`app/gemini.py`).
 - `artefatos:` — `[{role, path, required}]`. CLI lê pra saber quais arquivos coletar (`autograde_idp/evidence/artifacts.py:specs_from_yaml`); backend referencia `role` em `criterios.args` dos primitives `evidence.artifacts.*` e `judge.artifacts.*`.
-- `comandos_shell:` — `[[cmd, arg, ...]]` com placeholder `{owner_repo}`. CLI executa (`autograde_idp/evidence/shell.py:commands_from_yaml`); backend valida `cmd_joined` por string-equality contra a lista substituída (`app/evidence/shell.py:_expand_whitelist`).
+- `requer_repositorio:` — booleano, default `true`. `false` desliga a exigência de repo: o CLI não lê `remote.origin.url` nem manda `repo_url`, e o backend pula `parse_repo_url`, a checagem `repo_owner_mismatch`, o `collect_evidence` e o `_collect_first_commits`. Use em exercício cujo conteúdo não é o repositório (revisão bibliográfica, ensaio); mantenha `true` onde o repo **é** o objeto de aprendizado (aula 1). `parse_exercise_yaml` recusa `false` combinado com qualquer `check: github.*` ou `{owner_repo}` — a contradição viraria nota zero silenciosa. Sem repo, a identidade vem do login Google + roster; para amarrar também à conta GitHub, declare `gh auth status` em `comandos_shell:` e um critério `evidence.shell.gh_auth_ok`, que compara o usuário do `gh` com o `github_username` do roster sem precisar de repositório.
+- `comandos_shell:` — `[[cmd, arg, ...]]` ou `[{cmd, extract, timeout}]`, com placeholder `{owner_repo}`. `extract` é a chave em `evidence['shell']['commands']`; `timeout` é em segundos (teto: `MAX_TIMEOUT_SECONDS`). CLI executa (`autograde_idp/evidence/shell.py:commands_from_yaml`), e só binários da allowlist `YAML_BINARIOS_PERMITIDOS` — o YAML vem da internet e alimenta `subprocess.run`; backend valida `cmd_joined` por string-equality contra a lista substituída (`app/evidence/shell.py:_expand_whitelist`).
 
 CLI baixa o YAML direto do raw GitHub via `autograde_idp/exercicio_spec.py:fetch_exercise_spec` (env `AUTOGRADE_EXERCISES_BASE_URL`, default = idp_governodigital/main/exercicios). Mesmo URL que o backend já usa em `EXERCISES_BASE_URL` — fonte única, sem mediação.
 
