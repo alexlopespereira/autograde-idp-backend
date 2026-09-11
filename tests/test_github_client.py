@@ -513,3 +513,54 @@ def test_collect_evidence_happy_path(
     assert evidence["branches"] == ["main", "dev"]
     assert [p["number"] for p in evidence["prs_open"]] == [7]
     assert [p["number"] for p in evidence["prs_merged"]] == [5]
+
+
+# ---------- first_commit_at (ordem de trabalho, ia-3.2) ----------------------
+
+
+@responses.activate
+def test_first_commit_at_returns_oldest_commit_of_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(GITHUB_PAT_ENV, raising=False)
+    responses.add(responses.GET, _re("/repos/alice/repo1"), json=_repo_payload(), status=200)
+    responses.add(
+        responses.GET,
+        _re("/repos/alice/repo1/commits"),
+        json=[
+            _commit_payload("novo", date="2026-05-12T10:00:00Z"),
+            _commit_payload("meio", date="2026-05-11T10:00:00Z"),
+            _commit_payload("antigo", date="2026-05-10T10:00:00Z"),
+        ],
+        status=200,
+    )
+
+    client = GitHubClient()
+    quando = client.first_commit_at("https://github.com/alice/repo1", "revisao/x.md")
+    assert quando == "2026-05-10T10:00:00+00:00"
+
+
+@responses.activate
+def test_first_commit_at_returns_none_for_path_without_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Arquivo que nunca foi commitado devolve None — a primitive reprova com mensagem própria."""
+    monkeypatch.delenv(GITHUB_PAT_ENV, raising=False)
+    responses.add(responses.GET, _re("/repos/alice/repo1"), json=_repo_payload(), status=200)
+    responses.add(responses.GET, _re("/repos/alice/repo1/commits"), json=[], status=200)
+
+    client = GitHubClient()
+    assert client.first_commit_at("https://github.com/alice/repo1", "nao/existe.md") is None
+
+
+@responses.activate
+def test_first_commit_at_returns_none_when_repo_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(GITHUB_PAT_ENV, raising=False)
+    responses.add(
+        responses.GET, _re("/repos/alice/repo1"), json={"message": "Not Found"}, status=404
+    )
+
+    client = GitHubClient()
+    assert client.first_commit_at("https://github.com/alice/repo1", "a.md") is None

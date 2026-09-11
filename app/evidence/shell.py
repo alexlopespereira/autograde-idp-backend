@@ -133,7 +133,29 @@ def _ensure_aware_utc(dt: datetime) -> datetime:
     return dt
 
 
-def _match_whitelist(exercise_id: str, cmd_joined: str) -> bool:
+def _expand_whitelist(exercise: Exercise, owner_repo: str) -> tuple[str, ...] | None:
+    """Whitelist derivada do ``comandos_shell:`` do YAML do exercício.
+
+    Devolve os ``cmd_joined`` exatos que o CLI produz (`" ".join(cmd)`) com o
+    placeholder ``{owner_repo}`` já substituído — comparação por igualdade de
+    string, não regex: a fonte é o próprio YAML, então não há por que aceitar
+    variação. ``None`` significa "esse exercício não declara comandos no YAML"
+    e o chamador cai no ``_WHITELIST`` hardcoded (exercícios legados).
+    """
+    if not exercise.comandos_shell:
+        return None
+    out: list[str] = []
+    for comando in exercise.comandos_shell:
+        tokens = [tok.replace("{owner_repo}", owner_repo) for tok in comando.cmd]
+        out.append(" ".join(tokens))
+    return tuple(out)
+
+
+def _match_whitelist(
+    exercise_id: str, cmd_joined: str, yaml_whitelist: tuple[str, ...] | None
+) -> bool:
+    if yaml_whitelist is not None:
+        return cmd_joined in yaml_whitelist
     patterns = _WHITELIST.get(exercise_id, ())
     return any(p.match(cmd_joined) for p in patterns)
 
@@ -173,6 +195,7 @@ def validate_shell_evidence(
     *,
     expected_github_user: str,
     submitted_at: datetime,
+    owner_repo: str = "",
 ) -> ShellEvidenceContext:
     """Validate ``shell_evidence`` and produce a parsed context.
 
@@ -182,6 +205,8 @@ def validate_shell_evidence(
     items = list(evidence or [])
     if not items:
         return ShellEvidenceContext()
+
+    yaml_whitelist = _expand_whitelist(exercise, owner_repo)
 
     lower_bound = _ensure_aware_utc(exercise.disponivel_a_partir_de)
     upper_bound = _ensure_aware_utc(submitted_at) + CLOCK_SKEW_TOLERANCE
@@ -208,7 +233,7 @@ def validate_shell_evidence(
             raise InvalidShellEvidence(
                 f"shell_evidence[{idx}].cmd_joined ausente"
             )
-        if not _match_whitelist(exercise.id, cmd_joined):
+        if not _match_whitelist(exercise.id, cmd_joined, yaml_whitelist):
             raise InvalidShellEvidence(
                 f"shell_evidence[{idx}].cmd_joined fora do whitelist: {cmd_joined!r}"
             )

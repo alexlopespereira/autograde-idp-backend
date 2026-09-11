@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.curriculum import Criterio, Exercise
+from app.curriculum import ComandoShell, Criterio, Exercise
 from app.evidence.shell import (
     InvalidShellEvidence,
     ShellEvidenceContext,
@@ -353,3 +353,102 @@ def test_4_2_forged_python_command_rejected():
         validate_shell_evidence(
             payload, _ex("4.2"), expected_github_user="fulano", submitted_at=NOW
         )
+
+
+# ---------- whitelist vinda do YAML (comandos_shell:) -------------------------
+#
+# Exercícios que declaram `comandos_shell:` no YAML deixam de depender do
+# _WHITELIST hardcoded: a whitelist é a própria lista declarada, comparada por
+# igualdade de string. Isso é o que permite exercício novo sem deploy.
+
+
+def _ex_yaml(*comandos: ComandoShell, exercicio_id: str = "ia-3.1") -> Exercise:
+    return Exercise(
+        id=exercicio_id,
+        titulo="Ralph",
+        turmas=("IA-2026-01",),
+        disponivel_a_partir_de=DISPONIVEL,
+        prazo={"recomendado_ate": NOW + timedelta(days=7)},
+        criterios=(Criterio(id="x", peso=10, check="evidence.shell.pytest_passed", args={}),),
+        comandos_shell=comandos,
+    )
+
+
+def test_yaml_whitelist_aceita_comando_declarado():
+    ex = _ex_yaml(
+        ComandoShell(cmd=("python", "-m", "pytest", "-q", "--tb=no"), extract="pytest")
+    )
+    ctx = validate_shell_evidence(
+        [
+            {
+                **_cmd("python -m pytest -q --tb=no", stdout="4 passed in 0.1s"),
+                "extract": "pytest",
+            }
+        ],
+        ex,
+        expected_github_user="fulano",
+        submitted_at=NOW,
+    )
+    assert ctx.commands["pytest"]["stdout"] == "4 passed in 0.1s"
+
+
+def test_yaml_whitelist_rejeita_comando_nao_declarado():
+    ex = _ex_yaml(ComandoShell(cmd=("gh", "--version"), extract="gh_version"))
+    with pytest.raises(InvalidShellEvidence, match="fora do whitelist"):
+        validate_shell_evidence(
+            [_cmd("python -m pytest -q", stdout="1 passed")],
+            ex,
+            expected_github_user="fulano",
+            submitted_at=NOW,
+        )
+
+
+def test_yaml_whitelist_substitui_owner_repo():
+    ex = _ex_yaml(
+        ComandoShell(
+            cmd=("gh", "repo", "view", "{owner_repo}", "--json", "visibility,name,isPrivate"),
+            extract="gh_repo_view",
+        )
+    )
+    stdout = '{"name":"ralph-lab","visibility":"PUBLIC","isPrivate":false}'
+    ctx = validate_shell_evidence(
+        [_cmd("gh repo view fulano/ralph-lab --json visibility,name,isPrivate", stdout=stdout)],
+        ex,
+        expected_github_user="fulano",
+        submitted_at=NOW,
+        owner_repo="fulano/ralph-lab",
+    )
+    assert ctx.gh_repo_view == {
+        "name": "ralph-lab",
+        "visibility": "PUBLIC",
+        "isPrivate": False,
+    }
+
+
+def test_yaml_whitelist_rejeita_repo_de_outro_aluno():
+    """O placeholder é substituído pelo repo submetido: apontar pra outro repo cai fora."""
+    ex = _ex_yaml(
+        ComandoShell(
+            cmd=("gh", "repo", "view", "{owner_repo}", "--json", "visibility,name,isPrivate"),
+            extract="gh_repo_view",
+        )
+    )
+    with pytest.raises(InvalidShellEvidence, match="fora do whitelist"):
+        validate_shell_evidence(
+            [_cmd("gh repo view colega/ralph-lab --json visibility,name,isPrivate", stdout="{}")],
+            ex,
+            expected_github_user="fulano",
+            submitted_at=NOW,
+            owner_repo="fulano/ralph-lab",
+        )
+
+
+def test_sem_comandos_shell_no_yaml_cai_no_whitelist_hardcoded():
+    """Exercícios legados (1.2 e afins) continuam valendo pelo _WHITELIST."""
+    ctx = validate_shell_evidence(
+        [_cmd("gh --version", stdout="gh version 2.40.1 (2024-01-01)\n")],
+        _ex(),  # sem comandos_shell
+        expected_github_user="fulano",
+        submitted_at=NOW,
+    )
+    assert ctx.gh_version == "2.40.1"

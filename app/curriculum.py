@@ -55,6 +55,34 @@ class DatasetSql:
 
 
 @dataclass(frozen=True)
+class Artefato:
+    """Arquivo que o aluno entrega, declarado no YAML em ``artefatos:``.
+
+    ``role`` é a chave que os primitives ``evidence.artifacts.*`` e
+    ``judge.artifacts.*`` usam em ``criterios.args.role``; ``path`` é o caminho
+    relativo à raiz do repo do aluno que o CLI lê.
+    """
+
+    role: str
+    path: str
+    required: bool = True
+
+
+@dataclass(frozen=True)
+class ComandoShell:
+    """Comando que o CLI executa na máquina do aluno, declarado no YAML.
+
+    ``cmd`` é a lista argv (sem shell). O placeholder ``{owner_repo}`` é
+    substituído pelo CLI a partir do ``repo_url`` — e pelo backend, do mesmo
+    jeito, na hora de montar a whitelist que valida a evidência recebida.
+    ``extract`` rotula o resultado para os primitives ``evidence.shell.*``.
+    """
+
+    cmd: tuple[str, ...]
+    extract: str = ""
+
+
+@dataclass(frozen=True)
 class Exercise:
     id: str
     titulo: str
@@ -64,6 +92,18 @@ class Exercise:
     criterios: tuple[Criterio, ...]
     perguntas: tuple[Pergunta, ...] = ()
     dataset_sql: DatasetSql | None = None
+    artefatos: tuple[Artefato, ...] = ()
+    comandos_shell: tuple[ComandoShell, ...] = ()
+    # `false` desliga a exigência de que o trabalho esteja versionado num repo
+    # do GitHub: o CLI não lê `remote.origin.url`, não manda `repo_url`, e o
+    # backend não chama a API do GitHub. A identidade continua vindo do login
+    # Google + roster; quem quiser a amarra com a conta GitHub declara
+    # `gh auth status` em `comandos_shell:` e um critério
+    # `evidence.shell.gh_auth_ok` — que já confere o usuário contra o roster,
+    # sem precisar de repositório.
+    # Default `true` por compatibilidade: os exercícios de git (aula 1) e todos
+    # os YAMLs já no ar seguem exigindo repo sem precisar declarar nada.
+    requer_repositorio: bool = True
 
 
 def parse_exercise_yaml(yaml_text: str) -> Exercise:
@@ -123,12 +163,22 @@ def parse_exercise_yaml(yaml_text: str) -> Exercise:
 
     perguntas = _parse_perguntas(data.get("perguntas"))
     dataset_sql = _parse_dataset_sql(data.get("dataset_sql"))
+    artefatos = _parse_artefatos(data.get("artefatos"))
+    comandos_shell = _parse_comandos_shell(data.get("comandos_shell"))
+    requer_repositorio = _parse_requer_repositorio(data.get("requer_repositorio"))
 
     # Cross-check: pergunta sql precisa de uma base pra rodar a query gold.
     if any(p.tipo == "sql" for p in perguntas) and dataset_sql is None:
         raise CurriculumValidationError(
             "há pergunta tipo 'sql' mas falta o bloco 'dataset_sql' (schema + seed)"
         )
+
+    # Cross-check: declarar `requer_repositorio: false` e ainda depender do repo
+    # é contradição que, sem isto, viraria nota zero silenciosa em produção —
+    # o critério `github.*` não teria evidência e o `{owner_repo}` não teria
+    # com que ser substituído.
+    if not requer_repositorio:
+        _reject_repo_dependencies(criterios, comandos_shell)
 
     return Exercise(
         id=str(data["exercicio"]),
@@ -139,7 +189,48 @@ def parse_exercise_yaml(yaml_text: str) -> Exercise:
         criterios=tuple(criterios),
         perguntas=perguntas,
         dataset_sql=dataset_sql,
+        artefatos=artefatos,
+        comandos_shell=comandos_shell,
+        requer_repositorio=requer_repositorio,
     )
+
+
+def _parse_requer_repositorio(raw: Any) -> bool:
+    """Parseia ``requer_repositorio:`` — booleano estrito, default ``True``.
+
+    Não usa ``bool(raw)`` de propósito: no YAML, ``requer_repositorio: "false"``
+    é a string ``"false"``, que é truthy, e o exercício voltaria a exigir repo
+    sem ninguém perceber. Aqui isso é erro de validação.
+    """
+    if raw is None:
+        return True
+    if not isinstance(raw, bool):
+        raise CurriculumValidationError(
+            f"requer_repositorio precisa ser booleano (true/false), "
+            f"recebi {type(raw).__name__}"
+        )
+    return raw
+
+
+def _reject_repo_dependencies(
+    criterios: list[Criterio], comandos_shell: tuple[ComandoShell, ...]
+) -> None:
+    github_checks = sorted({c.id for c in criterios if c.check.startswith("github.")})
+    if github_checks:
+        raise CurriculumValidationError(
+            f"requer_repositorio: false, mas há criterios com check 'github.*' "
+            f"(sem repo o backend não lê a API do GitHub): {github_checks}"
+        )
+    com_placeholder = [
+        " ".join(c.cmd)
+        for c in comandos_shell
+        if any("{owner_repo}" in tok for tok in c.cmd)
+    ]
+    if com_placeholder:
+        raise CurriculumValidationError(
+            f"requer_repositorio: false, mas há comandos_shell com o "
+            f"placeholder '{{owner_repo}}' (nada para substituir): {com_placeholder}"
+        )
 
 
 def _parse_perguntas(raw: Any) -> tuple[Pergunta, ...]:
@@ -224,6 +315,75 @@ def _parse_dataset_sql(raw: Any) -> DatasetSql | None:
         raise CurriculumValidationError("dataset_sql: schema vazio")
     seed = str(raw.get("seed", "")).strip()
     return DatasetSql(schema=schema, seed=seed)
+
+
+def _parse_artefatos(raw: Any) -> tuple[Artefato, ...]:
+    """Parseia ``artefatos:`` — a lista de arquivos que o aluno entrega.
+
+    Ausente devolve tupla vazia: exercícios sem artefato textual (os de `gh`
+    puro, por exemplo) continuam válidos.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise CurriculumValidationError("artefatos precisa ser lista")
+    out: list[Artefato] = []
+    roles_vistos: set[str] = set()
+    for idx, a in enumerate(raw):
+        if not isinstance(a, dict):
+            raise CurriculumValidationError(f"artefatos[{idx}] precisa ser mapping")
+        for key in ("role", "path"):
+            if key not in a:
+                raise CurriculumValidationError(
+                    f"artefatos[{idx}]: campo '{key}' faltante"
+                )
+        role = str(a["role"]).strip()
+        path = str(a["path"]).strip()
+        if not role:
+            raise CurriculumValidationError(f"artefatos[{idx}]: role vazio")
+        if not path:
+            raise CurriculumValidationError(f"artefatos[{idx}]: path vazio")
+        if role in roles_vistos:
+            raise CurriculumValidationError(
+                f"artefatos[{idx}]: role '{role}' duplicado"
+            )
+        roles_vistos.add(role)
+        out.append(
+            Artefato(role=role, path=path, required=bool(a.get("required", True)))
+        )
+    return tuple(out)
+
+
+def _parse_comandos_shell(raw: Any) -> tuple[ComandoShell, ...]:
+    """Parseia ``comandos_shell:`` — o que o CLI roda na máquina do aluno.
+
+    Aceita duas formas por entrada:
+      * lista argv pura — ``["gh", "--version"]``
+      * mapping — ``{cmd: [...], extract: "pytest"}``
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise CurriculumValidationError("comandos_shell precisa ser lista")
+    out: list[ComandoShell] = []
+    for idx, c in enumerate(raw):
+        if isinstance(c, dict):
+            cmd_raw = c.get("cmd")
+            extract = str(c.get("extract", "") or "").strip()
+        else:
+            cmd_raw = c
+            extract = ""
+        if not isinstance(cmd_raw, list) or not cmd_raw:
+            raise CurriculumValidationError(
+                f"comandos_shell[{idx}]: cmd precisa ser lista nao vazia de strings"
+            )
+        cmd = tuple(str(tok) for tok in cmd_raw)
+        if any(not tok for tok in cmd):
+            raise CurriculumValidationError(
+                f"comandos_shell[{idx}]: token vazio no argv"
+            )
+        out.append(ComandoShell(cmd=cmd, extract=extract))
+    return tuple(out)
 
 
 def _parse_datetime(val: Any) -> datetime:

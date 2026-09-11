@@ -143,6 +143,31 @@ class GitHubClient:
 
         return _call_with_rate_limit_retry(_fetch)
 
+    def first_commit_at(self, repo_url: str, path: str) -> str | None:
+        """ISO da data do commit MAIS ANTIGO que tocou ``path``.
+
+        ``None`` quando o path nunca foi commitado (ou a API recusou). Usa
+        ``.reversed`` do PyGithub em vez de paginar tudo: o interesse é a
+        ordem em que os artefatos entraram no repo, e para isso basta a ponta
+        antiga da lista.
+        """
+
+        def _fetch() -> str | None:
+            repo = self.repo(repo_url)
+            commits = repo.get_commits(path=path)
+            try:
+                oldest = commits.reversed[0]
+            except (IndexError, StopIteration):
+                return None
+            return _commit_to_dict(oldest)["committed_at"]
+
+        try:
+            return _call_with_rate_limit_retry(_fetch)
+        except (UnknownObjectException, GithubException):
+            # Path inexistente devolve 404/409 (repo vazio) — ausência de
+            # commit não é erro de infra, é o próprio resultado.
+            return None
+
     def collect_evidence(self, repo_url: str) -> dict[str, Any]:
         owner_repo = parse_repo_url(repo_url)
         empty: dict[str, Any] = {

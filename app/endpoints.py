@@ -51,7 +51,10 @@ NOTA_COL_IDX = 6
 
 class GradeRequestBody(BaseModel):
     exercicio: str
-    repo_url: str
+    # Vazio é legítimo para exercício com `requer_repositorio: false` no YAML —
+    # o CLI nem lê o remote nesse caso. Quem exige repo cobra abaixo, em
+    # `_validate_and_grade`, onde a mensagem pode citar o exercício.
+    repo_url: str = ""
     ai_evidence: list[Any] | None = None
     shell_evidence: list[Any] | None = None
     artifacts_evidence: list[Any] | None = None
@@ -214,6 +217,41 @@ def _json_error(status_code: int, error: str, message: str = "") -> JSONResponse
     return JSONResponse(status_code=status_code, content=body)
 
 
+PATH_ORDER_CHECK = "github.file.first_commit_before"
+
+
+def _paths_needing_first_commit(exercise: Exercise) -> list[str]:
+    """Paths citados por criterios que checam ordem de entrada no repo.
+
+    Enriquecimento sob demanda: cada path custa uma chamada extra à API do
+    GitHub, então só coletamos o que o YAML do exercício realmente pediu.
+    """
+    paths: set[str] = set()
+    for criterio in exercise.criterios:
+        if criterio.check != PATH_ORDER_CHECK:
+            continue
+        for key in ("path_a", "path_b"):
+            value = criterio.args.get(key)
+            if isinstance(value, str) and value:
+                paths.add(value)
+    return sorted(paths)
+
+
+def _collect_first_commits(exercise: Exercise, repo_url: str) -> dict[str, str | None]:
+    paths = _paths_needing_first_commit(exercise)
+    if not paths:
+        return {}
+    client = get_github_client()
+    out: dict[str, str | None] = {}
+    for path in paths:
+        try:
+            out[path] = client.first_commit_at(repo_url, path)
+        except GitHubAPIError as exc:
+            log.warning("first_commit_failed path=%s status=%d", path, exc.status_code)
+            out[path] = None
+    return out
+
+
 def _validate_and_grade(
     request: Request, body: GradeRequestBody
 ) -> JSONResponse | tuple[Exercise, str, Bulletin, bool, int]:
@@ -272,29 +310,47 @@ def _validate_and_grade(
             + _faq("turma_not_eligible"),
         )
 
-    try:
-        owner_repo = parse_repo_url(body.repo_url)
-    except ValueError as exc:
-        return _json_error(
-            400,
-            "invalid_repo_url",
-            f"O remote `origin` deste diretorio ({body.repo_url!r}) nao e uma "
-            f"URL de repositorio do GitHub ({exc}). Rode `git config --get "
-            f"remote.origin.url` pra ver o que esta configurado — voce "
-            f"provavelmente esta no diretorio errado. " + _faq("invalid_repo_url"),
-        )
-    owner = owner_repo.split("/", 1)[0]
-    if owner.lower() != user.github_username.lower():
-        return _json_error(
-            403,
-            "repo_owner_mismatch",
-            f"O repo {owner_repo} pertence ao usuario GitHub `{owner}`, mas o "
-            f"github_username cadastrado no seu roster e "
-            f"`{user.github_username or '(vazio)'}`. Ou voce esta no diretorio "
-            f"de outro repo, ou o roster tem o username errado. Confira com "
-            f"`gh auth status` qual conta GitHub voce usa e avise o professor "
-            f"se o roster estiver desatualizado. " + _faq("repo_owner_mismatch"),
-        )
+    # Exercicio com `requer_repositorio: false` nao e avaliado pelo GitHub: nao
+    # ha owner_repo, nao ha checagem de dono e nao ha chamada a API. A amarra de
+    # identidade fica com o login Google + roster, e — quando o YAML declara
+    # `gh auth status` — com `gh_auth_ok`, que compara o usuario retornado pelo
+    # `gh` contra o `github_username` do roster sem precisar de repositorio.
+    owner_repo = ""
+    if exercise.requer_repositorio:
+        if not body.repo_url.strip():
+            return _json_error(
+                400,
+                "repo_url_required",
+                f"O exercicio {exercise.id} precisa estar num repositorio do "
+                f"GitHub, e a CLI nao encontrou um. Rode `autograde validar` de "
+                f"dentro da pasta do repo — `git config --get "
+                f"remote.origin.url` tem que devolver uma URL. Se a pasta ainda "
+                f"nao e um repo: `git init`, `gh repo create --source=. "
+                f"--public --push`. " + _faq("repo_url_required"),
+            )
+        try:
+            owner_repo = parse_repo_url(body.repo_url)
+        except ValueError as exc:
+            return _json_error(
+                400,
+                "invalid_repo_url",
+                f"O remote `origin` deste diretorio ({body.repo_url!r}) nao e uma "
+                f"URL de repositorio do GitHub ({exc}). Rode `git config --get "
+                f"remote.origin.url` pra ver o que esta configurado — voce "
+                f"provavelmente esta no diretorio errado. " + _faq("invalid_repo_url"),
+            )
+        owner = owner_repo.split("/", 1)[0]
+        if owner.lower() != user.github_username.lower():
+            return _json_error(
+                403,
+                "repo_owner_mismatch",
+                f"O repo {owner_repo} pertence ao usuario GitHub `{owner}`, mas o "
+                f"github_username cadastrado no seu roster e "
+                f"`{user.github_username or '(vazio)'}`. Ou voce esta no diretorio "
+                f"de outro repo, ou o roster tem o username errado. Confira com "
+                f"`gh auth status` qual conta GitHub voce usa e avise o professor "
+                f"se o roster estiver desatualizado. " + _faq("repo_owner_mismatch"),
+            )
 
     try:
         shell_context = validate_shell_evidence(
@@ -302,6 +358,7 @@ def _validate_and_grade(
             exercise,
             expected_github_user=user.github_username,
             submitted_at=submitted_at,
+            owner_repo=owner_repo,
         )
     except InvalidShellEvidence as exc:
         log.warning("shell_evidence_invalid exercicio=%s reason=%s", body.exercicio, exc.reason)
@@ -314,8 +371,10 @@ def _validate_and_grade(
             + _faq("invalid_shell_evidence"),
         )
 
+    github_evidence: dict[str, Any] = {}
     try:
-        github_evidence = get_github_client().collect_evidence(body.repo_url)
+        if exercise.requer_repositorio:
+            github_evidence = get_github_client().collect_evidence(body.repo_url)
     except GitHubAPIError as exc:
         log.error("github_collect_failed status=%d", exc.status_code)
         return _json_error(
@@ -334,6 +393,9 @@ def _validate_and_grade(
         "ai_evidence": body.ai_evidence or [],
         "shell": shell_context.to_evidence_dict(),
         "artifacts": body.artifacts_evidence or [],
+        "file_first_commit": _collect_first_commits(exercise, body.repo_url)
+        if github_evidence.get("repo_exists")
+        else {},
     }
     bulletin = grade(exercise, evidence)
     late, days = _compute_late(exercise, submitted_at)
