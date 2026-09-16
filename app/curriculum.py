@@ -101,9 +101,13 @@ class Exercise:
     # `gh auth status` em `comandos_shell:` e um critério
     # `evidence.shell.gh_auth_ok` — que já confere o usuário contra o roster,
     # sem precisar de repositório.
-    # Default `true` por compatibilidade: os exercícios de git (aula 1) e todos
-    # os YAMLs já no ar seguem exigindo repo sem precisar declarar nada.
-    requer_repositorio: bool = True
+    # Default `false`: a regra é que o aluno NÃO precisa versionar a solução, e
+    # não ganha ponto por versionar. Exercício que exige repositório é a
+    # exceção e declara `requer_repositorio: true` — é o caso de quando o repo
+    # É o objeto de aprendizado (aula 1). Quem depende do repo sem declarar
+    # nada é recusado por `_reject_repo_dependencies`, com a mensagem dizendo
+    # o que declarar: silêncio aqui vira nota zero silenciosa em produção.
+    requer_repositorio: bool = False
 
 
 def parse_exercise_yaml(yaml_text: str) -> Exercise:
@@ -166,6 +170,7 @@ def parse_exercise_yaml(yaml_text: str) -> Exercise:
     artefatos = _parse_artefatos(data.get("artefatos"))
     comandos_shell = _parse_comandos_shell(data.get("comandos_shell"))
     requer_repositorio = _parse_requer_repositorio(data.get("requer_repositorio"))
+    declarou_requer_repositorio = "requer_repositorio" in data
 
     # Cross-check: pergunta sql precisa de uma base pra rodar a query gold.
     if any(p.tipo == "sql" for p in perguntas) and dataset_sql is None:
@@ -173,12 +178,16 @@ def parse_exercise_yaml(yaml_text: str) -> Exercise:
             "há pergunta tipo 'sql' mas falta o bloco 'dataset_sql' (schema + seed)"
         )
 
-    # Cross-check: declarar `requer_repositorio: false` e ainda depender do repo
-    # é contradição que, sem isto, viraria nota zero silenciosa em produção —
-    # o critério `github.*` não teria evidência e o `{owner_repo}` não teria
-    # com que ser substituído.
+    # Cross-check: não exigir repositório e ainda depender dele é contradição
+    # que, sem isto, viraria nota zero silenciosa em produção — o critério
+    # `github.*` não teria evidência e o `{owner_repo}` não teria com que ser
+    # substituído. Vale tanto para o `false` declarado quanto para o YAML que
+    # não declarou nada e caiu no default; por isso a mensagem muda conforme o
+    # caso, porque o conserto é outro (tirar a dependência vs. declarar `true`).
     if not requer_repositorio:
-        _reject_repo_dependencies(criterios, comandos_shell)
+        _reject_repo_dependencies(
+            criterios, comandos_shell, declarado=declarou_requer_repositorio
+        )
 
     return Exercise(
         id=str(data["exercicio"]),
@@ -196,14 +205,16 @@ def parse_exercise_yaml(yaml_text: str) -> Exercise:
 
 
 def _parse_requer_repositorio(raw: Any) -> bool:
-    """Parseia ``requer_repositorio:`` — booleano estrito, default ``True``.
+    """Parseia ``requer_repositorio:`` — booleano estrito, default ``False``.
 
-    Não usa ``bool(raw)`` de propósito: no YAML, ``requer_repositorio: "false"``
-    é a string ``"false"``, que é truthy, e o exercício voltaria a exigir repo
-    sem ninguém perceber. Aqui isso é erro de validação.
+    O default é "não precisa versionar": exigir repositório é a exceção, e a
+    exceção se declara. Não usa ``bool(raw)`` de propósito: no YAML,
+    ``requer_repositorio: "false"`` é a string ``"false"``, que é truthy, e o
+    exercício passaria a exigir repo sem ninguém perceber. Aqui isso é erro de
+    validação.
     """
     if raw is None:
-        return True
+        return False
     if not isinstance(raw, bool):
         raise CurriculumValidationError(
             f"requer_repositorio precisa ser booleano (true/false), "
@@ -213,13 +224,29 @@ def _parse_requer_repositorio(raw: Any) -> bool:
 
 
 def _reject_repo_dependencies(
-    criterios: list[Criterio], comandos_shell: tuple[ComandoShell, ...]
+    criterios: list[Criterio],
+    comandos_shell: tuple[ComandoShell, ...],
+    *,
+    declarado: bool,
 ) -> None:
+    origem = (
+        "requer_repositorio: false"
+        if declarado
+        else "requer_repositorio não declarado (o default é false: exercício "
+        "sem repositório)"
+    )
+    conserto = (
+        "tire a dependência do repo"
+        if declarado
+        else "declare 'requer_repositorio: true' se o repositório é mesmo "
+        "parte do exercício"
+    )
     github_checks = sorted({c.id for c in criterios if c.check.startswith("github.")})
     if github_checks:
         raise CurriculumValidationError(
-            f"requer_repositorio: false, mas há criterios com check 'github.*' "
-            f"(sem repo o backend não lê a API do GitHub): {github_checks}"
+            f"{origem}, mas há criterios com check 'github.*' "
+            f"(sem repo o backend não lê a API do GitHub): {github_checks} — "
+            f"{conserto}"
         )
     com_placeholder = [
         " ".join(c.cmd)
@@ -228,8 +255,9 @@ def _reject_repo_dependencies(
     ]
     if com_placeholder:
         raise CurriculumValidationError(
-            f"requer_repositorio: false, mas há comandos_shell com o "
-            f"placeholder '{{owner_repo}}' (nada para substituir): {com_placeholder}"
+            f"{origem}, mas há comandos_shell com o placeholder "
+            f"'{{owner_repo}}' (nada para substituir): {com_placeholder} — "
+            f"{conserto}"
         )
 
 

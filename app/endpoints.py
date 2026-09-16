@@ -34,7 +34,9 @@ from app.evidence.shell import InvalidShellEvidence, validate_shell_evidence
 from app.gemini import GeminiResult, generate_sql, grade_respostas
 from app.github_client import GitHubAPIError, GitHubClient, parse_repo_url
 from app.grader import Bulletin, grade
+from app import reqctx
 from app.primitives import CriterioResult
+from app.roster import normalize_email
 from app.roster_writer import RosterWriter
 from app.sheets_writer import AppendResult, SheetsWriter, SubmissionRow
 
@@ -211,6 +213,23 @@ def _turma_for_exercise(user: Any, exercise: Exercise) -> str:
 
 
 def _json_error(status_code: int, error: str, message: str = "") -> JSONResponse:
+    """Recusa de regra de negócio — respondida ao aluno E registrada.
+
+    Os 18 pontos de recusa deste módulo eram, até 2026-09, completamente
+    mudos: `turma_not_eligible`, `repo_owner_mismatch` e os `rate_limit_*`
+    saíam para o aluno sem deixar uma linha de log. Um aluno travado
+    produzia exatamente zero evidência do lado do servidor, então toda
+    investigação começava no relato dele.
+
+    A identidade vem do contextvar (ver `app.reqctx`) e não de um parâmetro,
+    para não obrigar cada call site a carregar `request` só por causa do log.
+    `message` NÃO é logada: ela já é derivável de `error` e às vezes
+    carrega dado do aluno (turma, repo, email) sem ganho para a triagem.
+    """
+    log.warning(
+        "request_rejected",
+        extra={"status_code": status_code, "error": error, **reqctx.snapshot()},
+    )
     body: dict[str, str] = {"error": error}
     if message:
         body["message"] = message
@@ -510,7 +529,7 @@ def _check_rate_limit(
     for r in rows[1:]:  # pula header
         if len(r) <= max(email_col, exercicio_col, timestamp_col):
             continue
-        if r[email_col] != email or r[exercicio_col] != exercicio:
+        if normalize_email(r[email_col]) != normalize_email(email) or r[exercicio_col] != exercicio:
             continue
         try:
             row_ts = datetime.fromisoformat(r[timestamp_col])
@@ -723,7 +742,7 @@ async def me_grades(request: Request) -> Any:
     for row in rows:
         if len(row) <= max_idx:
             continue
-        if row[EMAIL_COL_IDX] != user.email:
+        if normalize_email(row[EMAIL_COL_IDX]) != normalize_email(user.email):
             continue
         exercicio = row[EXERCICIO_COL_IDX]
         try:

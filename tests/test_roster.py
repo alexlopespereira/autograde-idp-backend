@@ -168,3 +168,56 @@ def test_roster_still_rejects_empty_turma():
         roster.parse_roster(
             "email,nome,turma,github_username\naluno@idp.edu.br,Aluno,,fulano\n"
         )
+
+
+# --- normalização de caixa ---------------------------------------------
+# Regressão real: 21 dos 23 alunos de IA-2026-01 foram colados na planilha em
+# CAIXA ALTA. O Google manda a claim `email` sempre minúscula, o middleware
+# fazia `roster.get(email)` exato, e os 21 tomavam `403 not_in_roster` vendo o
+# próprio email correto na mensagem de erro.
+
+
+def test_parse_roster_normaliza_email_maiusculo():
+    csv_text = (
+        "email,nome,turma,github_username\n"
+        "IGO@GMAIL.COM,Igo Costa,IA-2026-01,\n"
+    )
+    result = parse_roster(csv_text)
+    assert "igo@gmail.com" in result
+    assert "IGO@GMAIL.COM" not in result
+    assert result["igo@gmail.com"].email == "igo@gmail.com"
+
+
+def test_parse_roster_duplicata_difere_so_na_caixa_raises():
+    """Antes do fix isto passava batido e criava DUAS entradas para a mesma
+    pessoa — a segunda invisível para o login, a primeira invisível para a
+    turma nova. Tem que estourar e forçar o merge na planilha."""
+    csv_text = (
+        "email,nome,turma,github_username\n"
+        "ana@idp.edu.br,Ana Silva,TD-2026-01,anasilva\n"
+        "ANA@IDP.EDU.BR,Ana Silva,IA-2026-01,\n"
+    )
+    with pytest.raises(RosterValidationError, match="duplicado.*ana@idp.edu.br"):
+        parse_roster(csv_text)
+
+
+@pytest.mark.parametrize(
+    "raw,esperado",
+    [
+        ("  Ana@IDP.edu.br  ", "ana@idp.edu.br"),
+        ("ANA@IDP.EDU.BR", "ana@idp.edu.br"),
+        ("", ""),
+    ],
+)
+def test_normalize_email(raw, esperado):
+    from app.roster import normalize_email
+
+    assert normalize_email(raw) == esperado
+
+
+def test_normalize_email_preserva_ponto_e_plus():
+    """Ponto e +tag NÃO são removidos: isso é regra do Gmail, não de email.
+    Em `.gov.br` apagar ponto junta pessoas diferentes."""
+    from app.roster import normalize_email
+
+    assert normalize_email("A.B+turma@Presidencia.gov.br") == "a.b+turma@presidencia.gov.br"

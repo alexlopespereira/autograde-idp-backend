@@ -36,6 +36,7 @@ def _make_exercise(
     exercicio_id: str = "1.1",
     disponivel: datetime | None = None,
     recomendado_ate: datetime | None = None,
+    requer_repositorio: bool = False,
 ) -> Exercise:
     if disponivel is None:
         disponivel = NOW - timedelta(days=7)
@@ -51,6 +52,9 @@ def _make_exercise(
             Criterio(id="c1", peso=60, check=PRIMITIVE_PASS, args={}),
             Criterio(id="c2", peso=40, check=PRIMITIVE_FAIL, args={}),
         ),
+        # Espelha o YAML: o default e nao exigir repositorio. Quem testa o
+        # caminho do GitHub pede a excecao explicitamente.
+        requer_repositorio=requer_repositorio,
     )
 
 
@@ -215,7 +219,8 @@ async def test_grade_preview_exercise_not_open_yet(patches) -> None:
 
 @pytest.mark.asyncio
 async def test_grade_preview_repo_owner_mismatch(patches) -> None:
-    _patch_endpoints(patches)
+    # Checagem de dono so existe no exercicio que exige repo (a excecao).
+    _patch_endpoints(patches, exercise=_make_exercise(requer_repositorio=True))
     response = await _post(
         _make_app(),
         "/grade-preview",
@@ -499,7 +504,8 @@ async def test_submissions_invalid_shell_evidence_returns_400(patches) -> None:
 async def test_grade_preview_valid_shell_evidence_reaches_grade(patches, monkeypatch) -> None:
     """US-14 AC5: valid shell_evidence is parsed into evidence['shell'] dict
     and passed to grade() alongside github_evidence."""
-    exercise = _make_exercise(exercicio_id="1.2")
+    # 1.2 é exercício de git: a evidência do GitHub convive com a do shell.
+    exercise = _make_exercise(exercicio_id="1.2", requer_repositorio=True)
     _patch_endpoints(patches, exercise=exercise)
 
     captured: dict[str, Any] = {}
@@ -1533,9 +1539,9 @@ async def test_grade_preview_sem_repo_nao_coleta_first_commit(patches) -> None:
 
 @pytest.mark.asyncio
 async def test_grade_preview_com_repo_exige_repo_url(patches) -> None:
-    # O default continua valendo: exercício de git sem `repo_url` é erro claro,
-    # não um 500 nem uma nota zero silenciosa.
-    _patch_endpoints(patches)
+    # Exercício que declara `requer_repositorio: true` e chega sem `repo_url`
+    # dá erro claro, não um 500 nem uma nota zero silenciosa.
+    _patch_endpoints(patches, exercise=_make_exercise(requer_repositorio=True))
     response = await _post(_make_app(), "/grade-preview", {"exercicio": "1.1"})
     assert response.status_code == 400
     assert response.json()["error"] == "repo_url_required"
@@ -1543,9 +1549,57 @@ async def test_grade_preview_com_repo_exige_repo_url(patches) -> None:
 
 @pytest.mark.asyncio
 async def test_grade_preview_com_repo_url_vazia_exige_repo(patches) -> None:
-    _patch_endpoints(patches)
+    _patch_endpoints(patches, exercise=_make_exercise(requer_repositorio=True))
     response = await _post(
         _make_app(), "/grade-preview", {"exercicio": "1.1", "repo_url": "   "}
     )
     assert response.status_code == 400
     assert response.json()["error"] == "repo_url_required"
+
+
+# --- rastreabilidade das recusas de regra de negocio ----------------------
+# Ate 2026-09 `endpoints.py` nao tinha NENHUMA chamada de logger: os 18
+# pontos de `_json_error` respondiam ao aluno sem deixar rastro no servidor.
+# Aluno travado = zero evidencia = investigacao comecando pelo relato dele.
+
+
+@pytest.mark.asyncio
+async def test_recusa_de_regra_de_negocio_vai_para_o_log_com_identidade(
+    patches, caplog
+) -> None:
+    import logging
+
+    _patch_endpoints(patches, exercise=_make_exercise(requer_repositorio=True))
+    with caplog.at_level(logging.WARNING, logger="app.endpoints"):
+        response = await _post(
+            _make_app(),
+            "/grade-preview",
+            {"exercicio": "1.1", "repo_url": "https://github.com/outra-pessoa/projeto"},
+        )
+    assert response.status_code == 403
+
+    rec = next(r for r in caplog.records if r.msg == "request_rejected")
+    assert rec.error == "repo_owner_mismatch"
+    assert rec.status_code == 403
+    assert rec.email == EMAIL           # de QUEM e a falha
+    assert rec.path == "/grade-preview"
+    assert rec.correlation_id == response.headers["X-Correlation-Id"]
+
+
+@pytest.mark.asyncio
+async def test_log_de_recusa_nao_vaza_a_message(patches, caplog) -> None:
+    """`message` carrega turma, repo e as vezes email do aluno, e nao ajuda
+    a triagem — `error` ja diz o que houve. Fica fora do log."""
+    import logging
+
+    _patch_endpoints(patches, exercise=_make_exercise(requer_repositorio=True))
+    with caplog.at_level(logging.WARNING, logger="app.endpoints"):
+        await _post(
+            _make_app(),
+            "/grade-preview",
+            {"exercicio": "1.1", "repo_url": "https://github.com/outra-pessoa/projeto"},
+        )
+
+    rec = next(r for r in caplog.records if r.msg == "request_rejected")
+    assert not hasattr(rec, "message_text")
+    assert "outra-pessoa" not in str(getattr(rec, "error", ""))

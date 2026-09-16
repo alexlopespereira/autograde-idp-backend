@@ -16,6 +16,8 @@ turmas: ["TD-2026-01"]
 disponivel_a_partir_de: "2026-03-10T08:00:00-03:00"
 prazo:
   recomendado_ate: "2026-03-17T23:59:59-03:00"
+# Exercicio de git: o repo E o conteudo avaliado, entao declara a excecao.
+requer_repositorio: true
 criterios:
   - id: repo_publico
     peso: 10
@@ -194,6 +196,7 @@ titulo: "T"
 turmas: ["X"]
 disponivel_a_partir_de: "2026-03-10T08:00:00-03:00"
 prazo: {recomendado_ate: "2026-03-17T23:59:59-03:00"}
+requer_repositorio: true
 criterios:
   - id: c1
     peso: 10
@@ -283,10 +286,12 @@ def test_parse_comandos_shell_invalidos(bloco: str, erro: str):
 
 
 # --- requer_repositorio ---------------------------------------------------
-# O default é `true` e vale para todo YAML já no ar: exercício de git (aula 1)
-# não declara nada e continua exigindo repo. `false` desliga a exigência, e o
-# parser recusa o YAML que declara `false` mas ainda depende do repo — essa
-# contradição, sem a checagem, vira nota zero silenciosa em produção.
+# O default é `false`: a regra é que o aluno não versiona a solução e não ganha
+# ponto por versionar. `true` é a exceção e precisa estar declarada — é o caso
+# do exercício de git (aula 1), onde o repo É o conteúdo avaliado. O parser
+# recusa o YAML que depende do repo sem declarar `true`, e também o que declara
+# `false` e ainda depende: sem essa checagem a contradição vira nota zero
+# silenciosa em produção.
 
 SEM_REPO_YAML = """
 exercicio: "ia-9.9"
@@ -314,8 +319,26 @@ criterios:
 """
 
 
-def test_requer_repositorio_default_true():
-    assert parse_exercise_yaml(HAPPY_YAML).requer_repositorio is True
+def test_requer_repositorio_default_false():
+    # Sem declarar nada, o exercício NÃO exige repositório.
+    yaml_sem_declaracao = SEM_REPO_YAML.replace("requer_repositorio: false\n", "")
+    assert "requer_repositorio" not in yaml_sem_declaracao
+    assert parse_exercise_yaml(yaml_sem_declaracao).requer_repositorio is False
+
+
+def test_requer_repositorio_ausente_com_criterio_github_raises():
+    # O YAML que depende do repo e não declara a exceção é recusado, e a
+    # mensagem aponta o conserto certo (declarar `true`) — que é outro do
+    # conserto de quem declarou `false` por engano (tirar a dependência).
+    yaml_text = SEM_REPO_YAML.replace("requer_repositorio: false\n", "").replace(
+        "  - id: ensaio_existe\n    peso: 10\n    check: evidence.artifacts.exists\n"
+        "    args:\n      role: ensaio\n",
+        "  - id: repo_publico\n    peso: 10\n    check: github.repo.public\n",
+    )
+    with pytest.raises(CurriculumValidationError) as exc:
+        parse_exercise_yaml(yaml_text)
+    assert "não declarado" in str(exc.value)
+    assert "requer_repositorio: true" in str(exc.value)
 
 
 def test_requer_repositorio_false_e_aceito():
@@ -326,11 +349,8 @@ def test_requer_repositorio_false_e_aceito():
 
 
 def test_requer_repositorio_true_explicito():
-    yaml_text = HAPPY_YAML.replace(
-        'titulo: "Seu Primeiro Repositorio"',
-        'titulo: "Seu Primeiro Repositorio"\nrequer_repositorio: true',
-    )
-    assert parse_exercise_yaml(yaml_text).requer_repositorio is True
+    # HAPPY_YAML é o exercício de git: o repo é o conteúdo, e ele declara.
+    assert parse_exercise_yaml(HAPPY_YAML).requer_repositorio is True
 
 
 def test_requer_repositorio_nao_booleano_raises():

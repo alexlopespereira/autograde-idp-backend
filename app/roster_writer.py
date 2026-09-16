@@ -23,6 +23,8 @@ from dataclasses import dataclass
 import google.auth
 from googleapiclient.discovery import Resource, build
 
+from app.roster import normalize_email
+
 SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
 EMAIL_COLUMN_RANGE = "A:A"
 NOME_COLUMN = "B"
@@ -62,7 +64,7 @@ class RosterWriter:
         for i, row in enumerate(values):
             if i == 0:
                 continue
-            if row and row[0] == email:
+            if row and normalize_email(row[0]) == normalize_email(email):
                 return i + 1
         return None
 

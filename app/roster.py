@@ -42,6 +42,25 @@ def split_turmas(raw: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+def normalize_email(raw: str) -> str:
+    """Forma canônica de um email para casar planilha com login Google.
+
+    O Google sempre manda a claim `email` do id_token em minúsculas; a
+    planilha é digitada/colada à mão e volta e meia vem em CAIXA ALTA. O
+    lookup do middleware é um `dict.get` exato, então `IGO@GMAIL.COM` na
+    planilha e `igo@gmail.com` no token não se encontram, e o aluno toma
+    `403 not_in_roster` com o email aparentemente certo na tela — o modo de
+    falha mais confuso que esse sistema tem. Normalizar aqui, na fronteira
+    de leitura, faz a planilha parar de importar para o casamento.
+
+    Só `strip` + `lower`: NÃO removemos pontos nem sufixo `+tag`, porque
+    `a.b@gmail.com` e `ab@gmail.com` serem a mesma caixa é regra do Gmail,
+    não de email em geral, e o roster tem domínio institucional (`.gov.br`,
+    `.org.br`) onde apagar ponto junta pessoas diferentes.
+    """
+    return (raw or "").strip().lower()
+
+
 @dataclass(frozen=True)
 class RosterEntry:
     email: str
@@ -73,7 +92,7 @@ def parse_roster(csv_text: str) -> dict[str, RosterEntry]:
             value = (row.get(col) or "").strip()
             if not value:
                 raise RosterValidationError(f"row {idx}: campo '{col}' vazio")
-        email = row["email"].strip()
+        email = normalize_email(row["email"])
         if email in result:
             raise RosterValidationError(f"row {idx}: email duplicado '{email}'")
         result[email] = RosterEntry(

@@ -214,3 +214,146 @@ async def test_blocking_io_runs_off_event_loop(monkeypatch, roster_fixture) -> N
     assert response.status_code == 200
     assert seen_threads["verify"] != main_thread_id
     assert seen_threads["get_roster"] != main_thread_id
+
+
+# --- caixa do email: planilha vs claim do Google ------------------------
+# Regressão de produção (IA-2026-01): a planilha tinha `IGCTS.DF@GMAIL.COM`,
+# o id_token trazia `igcts.df@gmail.com`, e o `roster.get` exato devolvia
+# None -> 403 not_in_roster, com o email certo impresso na mensagem.
+
+
+@pytest.fixture
+def roster_fixture_maiusculo() -> dict[str, RosterEntry]:
+    """Roster já normalizado pelo parser (chave minúscula), como em produção
+    depois do fix — mesmo que a célula da planilha esteja em caixa alta."""
+    return {
+        EMAIL_IN_ROSTER: RosterEntry(
+            email=EMAIL_IN_ROSTER,
+            nome="Aluno Fulano",
+            turma="IA-2026-01",
+            github_username="",
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_token_com_email_em_caixa_alta_encontra_o_roster(
+    monkeypatch, roster_fixture_maiusculo
+) -> None:
+    """Defesa do outro lado: se algum dia a claim vier com caixa diferente,
+    o middleware ainda tem que casar."""
+
+    def fake_verify(token: str, request_obj, audience: str):
+        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"], audience=audience)
+
+    monkeypatch.setattr(auth_module.id_token, "verify_oauth2_token", fake_verify)
+    monkeypatch.setattr(auth_module, "get_roster", lambda: roster_fixture_maiusculo)
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", JWT_AUDIENCE)
+
+    token = _make_token(EMAIL_IN_ROSTER.upper())
+    response = await _request(
+        _make_app(), "/protected", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["email"] == EMAIL_IN_ROSTER
+
+
+@pytest.mark.asyncio
+async def test_planilha_em_caixa_alta_passa_pelo_parser_e_autentica(
+    monkeypatch,
+) -> None:
+    """Ponta a ponta do bug real: CSV cru em CAIXA ALTA -> parse_roster ->
+    middleware -> 200. Este é o teste que teria evitado o incidente."""
+    from app.roster import parse_roster
+
+    csv_text = (
+        "email,nome,turma,github_username\n"
+        f"{EMAIL_IN_ROSTER.upper()},IGO COSTA,IA-2026-01,\n"
+    )
+    roster = parse_roster(csv_text)
+
+    def fake_verify(token: str, request_obj, audience: str):
+        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"], audience=audience)
+
+    monkeypatch.setattr(auth_module.id_token, "verify_oauth2_token", fake_verify)
+    monkeypatch.setattr(auth_module, "get_roster", lambda: roster)
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", JWT_AUDIENCE)
+
+    token = _make_token(EMAIL_IN_ROSTER)  # minúsculo, como o Google manda
+    response = await _request(
+        _make_app(), "/protected", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["email"] == EMAIL_IN_ROSTER
+
+
+# --- rastreabilidade: o log precisa dizer DE QUEM é a falha ---------------
+
+
+@pytest.mark.asyncio
+async def test_auth_error_loga_email_quando_o_token_ja_foi_verificado(
+    patch_auth, caplog
+) -> None:
+    """`not_in_roster` sem email no log foi o que fez o incidente da
+    IA-2026-01 durar: 9 falhas registradas, nenhuma atribuível."""
+    import logging
+
+    token = _make_token(EMAIL_NOT_IN_ROSTER)
+    with caplog.at_level(logging.WARNING, logger="app.auth"):
+        response = await _request(
+            _make_app(), "/protected", headers={"Authorization": f"Bearer {token}"}
+        )
+    assert response.status_code == 403
+
+    rec = next(r for r in caplog.records if r.msg == "auth_error")
+    assert rec.error == "not_in_roster"
+    assert rec.email == EMAIL_NOT_IN_ROSTER
+    assert rec.path == "/protected"
+    assert rec.correlation_id == response.headers["X-Correlation-Id"]
+
+
+@pytest.mark.asyncio
+async def test_auth_error_sem_token_valido_nao_inventa_email(
+    patch_auth, caplog
+) -> None:
+    """Em `missing_authorization` não há email confiável. O campo tem que
+    estar AUSENTE, não vazio: `email=""` sugeriria que foi coletado."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="app.auth"):
+        response = await _request(_make_app(), "/protected")
+    assert response.status_code == 401
+
+    rec = next(r for r in caplog.records if r.msg == "auth_error")
+    assert rec.error == "missing_authorization"
+    assert not hasattr(rec, "email")
+    assert rec.path == "/protected"
+
+
+@pytest.mark.asyncio
+async def test_contexto_de_identidade_chega_no_handler(patch_auth) -> None:
+    """O ponto frágil de todo o desenho: `BaseHTTPMiddleware` roda o app
+    downstream numa task própria. Se o contextvar setado no `dispatch` não
+    fosse herdado por ela, `endpoints._json_error` logaria sem email e o
+    conserto seria silenciosamente inútil. Este teste é o que garante isso.
+    """
+    from fastapi import FastAPI
+
+    from app import reqctx
+
+    app = FastAPI()
+    app.add_middleware(AuthMiddleware)
+
+    @app.get("/espia")
+    async def espia() -> dict[str, str]:
+        return dict(reqctx.snapshot())
+
+    token = _make_token(EMAIL_IN_ROSTER)
+    response = await _request(
+        app, "/espia", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    visto = response.json()
+    assert visto["email"] == EMAIL_IN_ROSTER
+    assert visto["path"] == "/espia"
+    assert visto["correlation_id"] == response.headers["X-Correlation-Id"]

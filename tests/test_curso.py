@@ -81,6 +81,7 @@ turmas: ["IA-2026-01"]
 disponivel_a_partir_de: "2026-03-10T08:00:00-03:00"
 prazo:
   recomendado_ate: "2026-03-17T23:59:59-03:00"
+requer_repositorio: true
 criterios:
   - id: repo_publico
     peso: 10
