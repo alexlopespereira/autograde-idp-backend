@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import re
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -20,8 +20,13 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from starlette.responses import JSONResponse
 
+from app import reqctx, sql_exec
 from app import roster as roster_module
-from app import sql_exec
+from app.calendario import (
+    CalendarioValidationError,
+    Janela,
+    resolve_janela,
+)
 from app.curriculum import (
     CurriculumValidationError,
     DatasetSql,
@@ -34,7 +39,6 @@ from app.evidence.shell import InvalidShellEvidence, validate_shell_evidence
 from app.gemini import GeminiResult, generate_sql, grade_respostas
 from app.github_client import GitHubAPIError, GitHubClient, parse_repo_url
 from app.grader import Bulletin, grade
-from app import reqctx
 from app.primitives import CriterioResult
 from app.roster import normalize_email
 from app.roster_writer import RosterWriter
@@ -181,9 +185,18 @@ def _coerce_datetime(raw: Any) -> datetime | None:
     return None
 
 
-def _compute_late(exercise: Exercise, submitted_at: datetime) -> tuple[bool, int]:
-    recomendado_raw = exercise.prazo.get("recomendado_ate")
-    recomendado = _coerce_datetime(recomendado_raw)
+def _compute_late(fecha: Any, submitted_at: datetime) -> tuple[bool, int]:
+    """(late, dias) contra o prazo recomendado — que pode vir de dois lugares.
+
+    Recebe a DATA, nao o `Exercise`: desde que o cronograma mora no calendario
+    da turma (app/calendario.py), o mesmo exercicio tem prazos diferentes para
+    turmas diferentes, e amarrar esta conta ao YAML era justamente o que
+    impedia isso.
+
+    Sem prazo -> nunca atrasado. Exercicio sem data de entrega e uma escolha
+    legitima do professor, nao um dado faltando.
+    """
+    recomendado = _coerce_datetime(fecha)
     if recomendado is None:
         return False, 0
     recomendado = _ensure_aware_utc(recomendado)
@@ -200,16 +213,157 @@ def _bulletin_to_dict(b: Bulletin) -> dict[str, Any]:
     }
 
 
-def _turma_for_exercise(user: Any, exercise: Exercise) -> str:
+def _turma_for_exercise(
+    user: Any, exercise: Exercise, janela: Janela | None = None
+) -> str:
     """Turma que sera gravada na Sheet: a que casou com o exercicio.
 
     Com a coluna `turma` aceitando varias turmas (`TD-2026-01;IA-2026-01`),
     gravar a string crua misturaria os cursos no relatorio do professor.
     """
+    if janela is not None:
+        return janela.turma
     match = [t for t in user.turmas if t in exercise.turmas]
     if match:
         return match[0]
     return user.turma
+
+
+def _calendario_fetcher(url: str) -> str | None:
+    """Busca um calendário de turma. ``None`` quando o arquivo não existe.
+
+    O 404 precisa ser distinguível de falha de rede: "esta turma não tem
+    calendário neste curso" é resposta legítima e comum (o aluno de TD não tem
+    calendário no repo de IA), enquanto GitHub fora do ar não pode virar
+    `turma_not_eligible` na cara do aluno.
+    """
+    import requests
+
+    response = requests.get(url, timeout=15)
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    return response.text
+
+
+@dataclass(frozen=True)
+class _Cronograma:
+    """Quando este exercício abre e vence PARA ESTE ALUNO."""
+
+    turma: str
+    abre: datetime | None
+    fecha: datetime | None
+    origem: str  # "calendario" | "yaml"
+
+
+def _resolver_cronograma(
+    user: Any, exercise: Exercise, exercicio_id: str
+) -> _Cronograma | JSONResponse:
+    """Casa aluno + exercício e devolve a janela, ou a recusa já formatada.
+
+    Duas fontes, nesta ordem:
+
+    1. **Calendário da turma** (`<curso>/turmas/<TURMA>.yaml`). Estar listado
+       lá É a matrícula, e as datas são por turma — que é o ponto da mudança.
+    2. **YAML do exercício** (`turmas:` + `disponivel_a_partir_de` + `prazo`).
+       Caminho legado, mantido porque backend e YAML são publicados em
+       momentos diferentes: um backend novo precisa continuar atendendo
+       exercício ainda não migrado, senão a janela entre os dois deploys
+       derruba a turma.
+
+    Calendário indisponível (rede, YAML corrompido) com legado presente cai no
+    legado; sem legado vira 502, não 403 — o aluno não pode levar "você não
+    está na turma" por causa de falha nossa.
+    """
+    indisponivel = False
+    janela = None
+    try:
+        curso, _ = split_exercise_id(exercicio_id)
+        base = exercises_base_url(curso)
+    except CursoError:
+        # Sem base configurada nao ha calendario para buscar. Nao e erro aqui:
+        # o YAML do exercicio ja foi carregado (por outra base, ou por mock em
+        # teste), entao o caminho legado ainda pode responder.
+        base = ""
+    if base:
+        try:
+            janela = resolve_janela(
+                user.turmas, exercicio_id, base, _calendario_fetcher
+            )
+        except CalendarioValidationError as exc:
+            indisponivel = True
+            log.warning(
+                "calendario_invalido",
+                extra={"exercicio": exercicio_id, "erro": str(exc)[:200]},
+            )
+        except Exception as exc:  # noqa: BLE001 - rede, DNS, timeout
+            indisponivel = True
+            log.warning(
+                "calendario_fetch_failed",
+                extra={"exercicio": exercicio_id, "erro": str(exc)[:200]},
+            )
+
+    if janela is not None:
+        return _Cronograma(
+            turma=janela.turma,
+            abre=janela.abre,
+            fecha=janela.fecha,
+            origem="calendario",
+        )
+
+    tem_legado = bool(exercise.turmas) or exercise.disponivel_a_partir_de is not None
+    if tem_legado:
+        if exercise.turmas and not set(user.turmas) & set(exercise.turmas):
+            return _recusa_turma(user, exercise)
+        match = [t for t in user.turmas if t in exercise.turmas]
+        return _Cronograma(
+            turma=match[0] if match else user.turma,
+            abre=exercise.disponivel_a_partir_de,
+            fecha=exercise.prazo.get("recomendado_ate"),
+            origem="yaml",
+        )
+
+    if indisponivel:
+        return _json_error(
+            502,
+            "calendario_unavailable",
+            "Nao consegui ler o calendario da sua turma agora. Isso e um "
+            "problema do servidor, nao seu — nao ha nada para consertar do "
+            "seu lado. Tente de novo em alguns minutos; se persistir, avise "
+            "o professor.",
+        )
+
+    return _recusa_turma(user, exercise)
+
+
+def _recusa_turma(user: Any, exercise: Exercise) -> JSONResponse:
+    """403 turma_not_eligible com o conserto na mensagem.
+
+    Regressao de um relato real: o aluno via so `{"error":"turma_not_eligible"}`
+    e tentava `autograde login`, que nao tem nada a ver — quem define turma e
+    o roster. A mensagem diz a turma dele, a do exercicio e onde se conserta.
+    """
+    minhas = ", ".join(user.turmas) or "(vazio)"
+    if exercise.turmas:
+        onde = f"O exercicio {exercise.id} e da(s) turma(s): {', '.join(exercise.turmas)}."
+        exemplo = exercise.turmas[0]
+    else:
+        onde = (
+            f"O exercicio {exercise.id} nao aparece no calendario de nenhuma "
+            f"das suas turmas."
+        )
+        exemplo = "TURMA-DO-EXERCICIO"
+    return _json_error(
+        403,
+        "turma_not_eligible",
+        f"Voce esta matriculado em: {minhas}. {onde} Isso NAO se resolve com "
+        f"`autograde login` — quem define sua turma e a planilha do roster, "
+        f"nao o seu login Google. Peca ao professor para corrigir a coluna "
+        f"`turma` da sua linha (ela aceita mais de uma turma separada por "
+        f"`;`, ex.: `{minhas};{exemplo}`). Se voce quis rodar outro "
+        f"exercicio, confira o id: `autograde validar <id>`. "
+        + _faq("turma_not_eligible"),
+    )
 
 
 def _json_error(status_code: int, error: str, message: str = "") -> JSONResponse:
@@ -301,32 +455,27 @@ def _validate_and_grade(
         )
 
     submitted_at = _now_utc()
-    disponivel = _ensure_aware_utc(exercise.disponivel_a_partir_de)
-    if submitted_at < disponivel:
+    user = request.state.user
+
+    # Matricula e cronograma numa resolucao so: o calendario da turma responde
+    # "este aluno cursa este exercicio?" e "com que datas?" ao mesmo tempo,
+    # porque no novo modelo sao a mesma pergunta — estar listado no calendario
+    # da turma E a matricula. O caminho legado (YAML com `turmas:`) continua
+    # atendido la dentro enquanto os exercicios nao migram.
+    cronograma = _resolver_cronograma(user, exercise, body.exercicio)
+    if isinstance(cronograma, JSONResponse):
+        return cronograma
+    request.state.cronograma = cronograma
+
+    abre = _coerce_datetime(cronograma.abre)
+    if abre is not None and submitted_at < _ensure_aware_utc(abre):
         return _json_error(
             403,
             "exercise_not_open_yet",
-            f"O exercicio {exercise.id} abre em "
-            f"{exercise.disponivel_a_partir_de.isoformat()}. Nao ha nada pra "
-            f"consertar do seu lado — volte depois dessa data. "
+            f"O exercicio {exercise.id} abre em {abre.isoformat()} para a "
+            f"turma {cronograma.turma}. Nao ha nada pra consertar do seu "
+            f"lado — volte depois dessa data. "
             + _faq("exercise_not_open_yet"),
-        )
-
-    user = request.state.user
-    if exercise.turmas and not set(user.turmas) & set(exercise.turmas):
-        minhas = ", ".join(user.turmas) or "(vazio)"
-        dele = ", ".join(exercise.turmas)
-        return _json_error(
-            403,
-            "turma_not_eligible",
-            f"Voce esta matriculado em: {minhas}. O exercicio {exercise.id} e "
-            f"da(s) turma(s): {dele}. Isso NAO se resolve com `autograde "
-            f"login` — quem define sua turma e a planilha do roster, nao o "
-            f"seu login Google. Peca ao professor para corrigir a coluna "
-            f"`turma` da sua linha (ela aceita mais de uma turma separada por "
-            f"`;`, ex.: `{minhas};{exercise.turmas[0]}`). Se voce quis rodar "
-            f"outro exercicio, confira o id: `autograde validar <id>`. "
-            + _faq("turma_not_eligible"),
         )
 
     # Exercicio com `requer_repositorio: false` nao e avaliado pelo GitHub: nao
@@ -417,7 +566,7 @@ def _validate_and_grade(
         else {},
     }
     bulletin = grade(exercise, evidence)
-    late, days = _compute_late(exercise, submitted_at)
+    late, days = _compute_late(cronograma.fecha, submitted_at)
     return exercise, yaml_text, bulletin, late, days
 
 
@@ -692,7 +841,9 @@ async def submissions(body: SubmissionRequestBody, request: Request) -> Any:
         submission_id=body.submission_uuid,
         email=user.email,
         nome=user.roster.nome,
-        turma=_turma_for_exercise(user, exercise),
+        turma=_turma_for_exercise(
+            user, exercise, getattr(request.state, "cronograma", None)
+        ),
         exercicio=body.exercicio,
         nota=bulletin.total,
         nota_max=bulletin.max_total,
