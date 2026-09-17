@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable
 
 import yaml
 
+# `turmas`, `disponivel_a_partir_de` e `prazo` saíram daqui: quem matricula a
+# turma e define o cronograma é o calendário da turma (ver app/calendario.py).
+# Continuam ACEITOS e são o caminho de compatibilidade enquanto os YAMLs não
+# migram — mas exercício novo não precisa mais declará-los.
 REQUIRED_TOP_KEYS = (
     "exercicio",
     "titulo",
-    "turmas",
-    "disponivel_a_partir_de",
-    "prazo",
     "criterios",
 )
 REQUIRED_CRITERIO_KEYS = ("id", "peso", "check")
@@ -86,10 +87,15 @@ class ComandoShell:
 class Exercise:
     id: str
     titulo: str
-    turmas: tuple[str, ...]
-    disponivel_a_partir_de: datetime
-    prazo: dict[str, Any]
     criterios: tuple[Criterio, ...]
+    # --- cronograma legado -------------------------------------------------
+    # Fonte da verdade é o calendário da turma (app/calendario.py). Estes três
+    # campos sobrevivem para os YAMLs ainda não migrados; quando o calendário
+    # responde pelo exercício, `endpoints` nem olha para eles. Vazios = "este
+    # YAML não sabe nada sobre turma nem prazo", que é o estado final desejado.
+    turmas: tuple[str, ...] = ()
+    disponivel_a_partir_de: datetime | None = None
+    prazo: dict[str, Any] = field(default_factory=dict)
     perguntas: tuple[Pergunta, ...] = ()
     dataset_sql: DatasetSql | None = None
     artefatos: tuple[Artefato, ...] = ()
@@ -126,16 +132,23 @@ def parse_exercise_yaml(yaml_text: str) -> Exercise:
     if missing:
         raise CurriculumValidationError(f"campos obrigatorios faltantes: {missing}")
 
-    try:
-        disponivel = _parse_datetime(data["disponivel_a_partir_de"])
-    except (TypeError, ValueError) as exc:
-        raise CurriculumValidationError(f"disponivel_a_partir_de invalido: {exc}") from exc
+    # Os três campos de cronograma são opcionais desde que o calendário da
+    # turma existe. Ausentes viram vazio; presentes continuam validados com o
+    # mesmo rigor — YAML meio-migrado com data inválida não passa batido.
+    disponivel = None
+    if data.get("disponivel_a_partir_de") is not None:
+        try:
+            disponivel = _parse_datetime(data["disponivel_a_partir_de"])
+        except (TypeError, ValueError) as exc:
+            raise CurriculumValidationError(
+                f"disponivel_a_partir_de invalido: {exc}"
+            ) from exc
 
-    turmas_raw = data["turmas"]
+    turmas_raw = data.get("turmas") or []
     if not isinstance(turmas_raw, list) or not all(isinstance(t, str) for t in turmas_raw):
         raise CurriculumValidationError("turmas precisa ser lista de strings")
 
-    prazo = data["prazo"]
+    prazo = data.get("prazo") or {}
     if not isinstance(prazo, dict):
         raise CurriculumValidationError("prazo precisa ser mapping")
 

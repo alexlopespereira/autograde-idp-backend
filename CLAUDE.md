@@ -36,7 +36,8 @@ Deploy: `gcloud builds submit --config=cloudbuild.yaml --substitutions=...`. CI 
 
 ```
 load_exercise(id) → curso.split_exercise_id(id) → base URL do curso → fetch YAML → parse_exercise_yaml
-  → checa janela (disponivel_a_partir_de) e turma
+  → resolve cronograma: calendário da turma (app/calendario.py) ou, se não houver, o YAML legado
+  → checa janela (abre) e matrícula
   → se requer_repositorio (exceção, declarada): parse_repo_url + checa owner == user.github_username
     (default false: owner_repo="" e nada do GitHub abaixo roda)
   → validate_shell_evidence (whitelist por exercício, clock-skew ±30min)
@@ -77,6 +78,49 @@ Auth pra Sheets: `google.auth.default()` (ADC). Em produção usa SA do Cloud Ru
 ### Rate limit (endpoints.py)
 
 3 tentativas/dia + 30s cooldown por (email, exercicio). Aplicado em `/submissions` (sempre) e em `/grade-preview` (somente quando vem com respostas — disparar Gemini é caro). Reset à **meia-noite local America/Sao_Paulo** (pedagogicamente intuitivo; daí `tzdata` no `pyproject.toml` pra CI Windows). Emails em `RATE_LIMIT_BYPASS_EMAILS` (CSV, lido a cada call → hot-update) pulam tudo.
+
+## Calendário por turma (app/calendario.py)
+
+**Prazo e matrícula moram na turma, não no exercício.** O YAML do exercício é
+conteúdo pedagógico; quem diz "esta turma cursa este exercício, com estas
+datas" é `<base do curso>/turmas/<TURMA>.yaml`:
+
+```yaml
+turma: IA-2026-01
+padrao:
+  abre:  2026-09-01T00:00:00-03:00
+  fecha: 2026-10-20T23:59:59-03:00
+exercicios:
+  ia-1.1:                              # linha vazia = herda o padrão
+  ia-3.1:
+    fecha: 2026-10-27T23:59:59-03:00   # exceção explícita
+```
+
+O schema antigo tinha `turmas:` (plural) com `disponivel_a_partir_de` e
+`prazo:` (singulares) no mesmo arquivo. Reaproveitar um exercício numa turma
+nova obrigava a **sobrescrever** as datas da anterior — dez arquivos por
+semestre. Em 2026-09 a conta chegou: aulas 3-5 foram atualizadas, aula 1 ficou
+no calendário anterior, e toda submissão de `ia-1.1` foi gravada com 107 dias
+de atraso até um aluno escrever. Abrir turma agora custa um arquivo;
+reaproveitar exercício, uma linha; e o calendário da turma que terminou fica
+imutável.
+
+Estar listado em `exercicios:` **é** a matrícula — por isso a entrada vazia é a
+forma canônica. `abre` bloqueia (`exercise_not_open_yet`); `fecha` só marca
+`late`. Sem `abre` (nem no `padrao`) o arquivo é recusado: assumir "abre
+sempre" seria inventar a intenção do professor num campo que tranca aluno.
+
+`_resolver_cronograma` (endpoints.py) tenta o calendário e cai no YAML legado
+quando ele existe — a janela entre o deploy do backend e a publicação dos
+calendários é real, e um backend novo precisa atender exercício não migrado.
+Calendário indisponível **sem** legado vira `502 calendario_unavailable`, nunca
+`403 turma_not_eligible`: falha nossa não pode chegar ao aluno como "você não
+está na turma". Cache de 300s por URL (`get_or_fetch`, o mesmo do roster), o
+que torna uma turma inteira submetendo um GET e não duzentos.
+
+Ao abrir turma: crie `turmas/<TURMA>.yaml` nos repos de conteúdo dos cursos
+que ela cursa e preencha a coluna `turma` do roster com o mesmo id (aceita
+mais de um, separado por `;`). `driver.py roster` mostra o que o backend lê.
 
 ## Princípio: conteúdo de exercício mora no YAML
 
