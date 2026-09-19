@@ -24,7 +24,7 @@ Variáveis de ambiente obrigatórias (ver README.md): `GOOGLE_OAUTH_CLIENT_ID`, 
 
 Um deployment e uma Submissions Sheet servem N cursos. O curso é derivado do **prefixo do id do exercício**: `ia-1.1` → curso `ia`; sem prefixo → `td` (Transformação Digital, legado). Isso resolve de uma vez a agregação (`/me/grades` agrega por `exercicio`, e `ia-1.1` != `1.1`), o roteamento (`EXERCISES_BASE_URL_<CURSO>` → `EXERCISES_BASE_URL`) e a coluna `curso` (T) da Sheet, que é derivada — não digitada.
 
-Ao adicionar curso: prefixo de 2–8 letras minúsculas, YAMLs nomeados com o id completo (`ia-1.1.yaml`, `exercicio: "ia-1.1"`), env var nova nos 3 lugares de sempre, e — se reaproveitar exercício **legado** com evidência shell — registrar o id qualificado em `app/evidence/shell.py:_WHITELIST`. Exercício novo não precisa: declare `comandos_shell:` no YAML e a whitelist sai dali (`_WHITELIST` é só o fallback dos que já estão no ar). O CLI espelha tudo em `autograde_idp/curso.py`.
+Ao adicionar curso: prefixo de 2–8 letras minúsculas, YAMLs nomeados com o id completo (`ia-1.1.yaml`, `exercicio: "ia-1.1"`), env var nova nos 4 lugares de sempre, e — se reaproveitar exercício **legado** com evidência shell — registrar o id qualificado em `app/evidence/shell.py:_WHITELIST`. Exercício novo não precisa: declare `comandos_shell:` no YAML e a whitelist sai dali (`_WHITELIST` é só o fallback dos que já estão no ar). O CLI espelha tudo em `autograde_idp/curso.py`.
 
 Deploy: `gcloud builds submit --config=cloudbuild.yaml --substitutions=...`. CI workflow `cloud-run-deploy.yml` é **`workflow_dispatch` only** — não habilitar `on: push` sem confirmação (turma ativa). Quando atualizar deploy, manter `cloudbuild.yaml` e `.github/workflows/cloud-run-deploy.yml` em sync (env vars + secrets espelhados).
 
@@ -56,8 +56,8 @@ Sistema de plugin via registry: `register("name")` decora `(args, evidence) → 
 `AuthMiddleware` (Starlette) intercepta tudo exceto `PUBLIC_PATHS = {"/healthz", "/oauth/exchange", "/oauth/refresh"}`. Fluxo:
 
 1. Verifica `Authorization: Bearer <id_token>` via `google.oauth2.id_token` com audience = `GOOGLE_OAUTH_CLIENT_ID`.
-2. Carrega roster (CSV publicado da Roster Sheet, cache TTL 300s em `app.roster._CACHE`).
-3. Email não no roster → `403 not_in_roster`.
+2. Carrega roster (CSV publicado da Roster Sheet, cache TTL 300s em `app.roster._CACHE`). O dict é indexado pela **conta**, não pelo aluno: a coluna `email` aceita N contas separadas por `;` (mesmo separador da coluna `turma`) e cada uma aponta pro **mesmo** `RosterEntry`.
+3. Email não no roster → `403 not_in_roster`. Foi a falha mais frequente de setembro/2026 (5 alunos em 4 dias) e nunca por email errado: o aluno estava cadastrado com a conta **institucional** e logava com a **pessoal**, ou o contrário. Daí o multi-conta — o conserto não é escolher uma, é listar as duas. A **primeira** conta da célula é a canônica: é ela que vai pro `user.email`, pra Submissions Sheet, pro `reqctx` e pro log. Consequência operacional: ao acrescentar conta, **anexe no fim**; reordenar a célula reescreve a identidade do aluno e órfã as notas já gravadas (`/me/grades` e o rate-limit somam todas as contas, então elas continuam sendo lidas — mas a coluna `email` da planilha passa a divergir). `user.emails` expõe a tupla completa pra quem precisa comparar contra dado histórico.
 4. Anexa `request.state.user = AuthenticatedUser(google, roster)` e `request.state.correlation_id`. Toda resposta inclui header `X-Correlation-Id`.
 
 Endpoints downstream sempre leem `request.state.user.email` / `.github_username` / `.turma` / `.roster.nome` — **nunca** confiar em campos do body pra identidade.
@@ -71,7 +71,7 @@ Backend faz proxy do `/token` do Google (Device Flow) pra não vazar `GOOGLE_OAU
 Dois writers, contratos diferentes — **não unificar** (decisão consciente no prd.json US-02).
 
 - `SheetsWriter` → tabs `submissoes` (20 colunas, schema em `COLUMNS`) e `previews` (3 colunas, pra rate-limit do preview-com-Gemini). Idempotência por `submission_id` (lê coluna B antes de append). Telemetria de row-count antes/depois detecta `SHEETS_DROP_DETECTED` (Sheets API às vezes silenciosamente perde appends). `asyncio.Lock` module-level serializa appends — funciona porque Cloud Run roda `--max-instances=1` (um único event loop).
-- `RosterWriter` → escreve `nome` e `github_username` na Roster Sheet via `POST /me/profile`. **Anti-hijacking**: só atualiza célula se está vazia. `valueInputOption='RAW'` (string `=BAR()` não vira fórmula). Retorna `ProfileUpdateResult(updated, skipped)`. Endpoint invalida `app.roster._clear_cache()` pós-update.
+- `RosterWriter` → escreve `nome` e `github_username` na Roster Sheet via `POST /me/profile`. **Anti-hijacking**: só atualiza célula se está vazia. `get_row_index` casa a conta contra `split_emails(row[0])`, não contra a célula inteira: comparando a célula, `autograde perfil` levantaria `UserNotInRoster` exatamente para o aluno que precisou do multi-conta. `valueInputOption='RAW'` (string `=BAR()` não vira fórmula). Retorna `ProfileUpdateResult(updated, skipped)`. Endpoint invalida `app.roster._clear_cache()` pós-update.
 
 Auth pra Sheets: `google.auth.default()` (ADC). Em produção usa SA do Cloud Run; em dev usa `gcloud auth application-default login`.
 
@@ -142,7 +142,35 @@ Quando precisar adicionar nova categoria de "conteúdo específico do exercício
 - Validação YAML: `CurriculumValidationError` é a exceção do domínio de exercícios; primitives nunca raise — capturam exceção e devolvem `CriterioResult(passed=False, ..., degraded=False)`.
 - Dataclasses frozen pra tudo que é "modelo" (`Exercise`, `Criterio`, `Pergunta`, `RosterEntry`, `Bulletin`, `CriterioResult`, `SubmissionRow`, `GoogleUser`, `AuthenticatedUser`).
 - Bumps de versão: contrato HTTP muda → minor bump em `pyproject.toml` (ex: `0.2.0 → 0.3.0` adicionou `/me/profile` e campo `github_username` em `/me/identity`).
-- Quando adicionar env var nova: atualizar **3 lugares** — `cloudbuild.yaml` (`substitutions` + `--set-env-vars`), `.github/workflows/cloud-run-deploy.yml` (mesmo `--set-env-vars`), e seção "Variáveis de ambiente" do `README.md`.
+- Quando adicionar env var nova: atualizar **4 lugares** — `cloudbuild.yaml` (`substitutions` + `--set-env-vars`), `.github/workflows/cloud-run-deploy.yml` (mesmo `--set-env-vars`), `.github/workflows/audit-planilhas.yml` (o audit precisa saber de todo curso, senão para de auditar o curso novo em silêncio) e seção "Variáveis de ambiente" do `README.md`.
+
+## Audit das planilhas (scripts/audit_planilhas.py)
+
+As duas fontes de verdade que **não passam por PR** são a Roster Sheet
+(editada à mão, lida a cada request) e os `turmas/<TURMA>.yaml` (buscados da
+`main` a cada submissão). Nenhuma tem suíte no repo, e as duas já quebraram —
+21 emails em CAIXA ALTA derrubando uma turma inteira com `not_in_roster`, e um
+autofill do Sheets incrementando a coluna `turma` de 29 alunos por 13h. Nos
+dois casos a checagem existia (`driver.py roster`, `driver.py calendario`) e
+passava: o que faltava era ela rodar sem alguém lembrar.
+
+`scripts/audit_planilhas.py` é essa checagem sem dependência do driver nem de
+credencial de nuvem (o CSV do roster é publicado e os YAMLs vêm do raw público;
+só `ROSTER_URL` é secret). Contrato de exit code, que é o que o cron consome:
+**0** = nada fatal, **1** = achado fatal (aluno bloqueado agora ou a caminho),
+**2** = o audit não conseguiu rodar. Fatal é só o que chega ao aluno: CSV que
+`parse_roster` recusa (all-or-nothing → 502 pra turma toda), conta que não
+resolve no lookup, aluno sem **nenhuma** turma com calendário, calendário que
+não parseia, campo `turma:` divergindo do nome do arquivo, exercício listado
+cujo YAML dá 404. Prazo vencido é **aviso** de propósito — é estado legítimo
+depois da aula, e job permanentemente vermelho deixa de ser lido.
+
+`.github/workflows/audit-planilhas.yml` roda de manhã (`0 11 * * *` = 08:00
+BRT), em `workflow_dispatch`, e em PR que mexa nos parsers ou no próprio
+script. Workflow agendado que falha manda email pro dono do repo
+automaticamente — não há alerta a configurar. `tests/test_audit_planilhas.py`
+cobre o script com `http_get` mockado, cada incidente real na forma em que
+apareceu.
 
 ## Testes
 

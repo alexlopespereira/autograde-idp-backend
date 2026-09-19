@@ -1603,3 +1603,148 @@ async def test_log_de_recusa_nao_vaza_a_message(patches, caplog) -> None:
     rec = next(r for r in caplog.records if r.msg == "request_rejected")
     assert not hasattr(rec, "message_text")
     assert "outra-pessoa" not in str(getattr(rec, "error", ""))
+
+
+# --- o exercicio na recusa ------------------------------------------------
+# Complemento do bloco acima: `error` + `email` + `path` responderam "quem
+# falhou", mas nao "em que". Para `turma_not_eligible` e
+# `exercise_not_open_yet` isso deixa a causa indeterminavel — na investigacao
+# de setembro/2026 nao foi possivel dizer se o aluno estava com a turma errada
+# no roster ou se tinha digitado `1.1` no lugar de `ia-1.1`, porque o id do
+# exercicio nao estava em lugar nenhum do log.
+
+
+@pytest.mark.asyncio
+async def test_recusa_loga_o_exercicio(patches, caplog) -> None:
+    import logging
+
+    _patch_endpoints(patches, exercise=_make_exercise(requer_repositorio=True))
+    with caplog.at_level(logging.WARNING, logger="app.endpoints"):
+        response = await _post(
+            _make_app(),
+            "/grade-preview",
+            {"exercicio": "1.1", "repo_url": "https://github.com/outra-pessoa/projeto"},
+        )
+    assert response.status_code == 403
+
+    rec = next(r for r in caplog.records if r.msg == "request_rejected")
+    assert rec.exercicio == "1.1"
+
+
+@pytest.mark.asyncio
+async def test_recusa_emitida_fora_da_thread_tambem_loga_o_exercicio(
+    patches, caplog
+) -> None:
+    """Guarda de regressao do detalhe que quebraria isto em silencio:
+    `_validate_and_grade` roda em `asyncio.to_thread`, que COPIA o contexto.
+    Setar o contextvar lá dentro faria as recusas do proprio handler (as de
+    rate-limit, emitidas fora da thread) sairem sem o exercicio. Este teste
+    exercita uma recusa do lado de fora."""
+    import logging
+
+    # 1 pergunta no exercicio, 2 respostas no body -> `respostas_mismatch`,
+    # recusado por `_validate_respostas`, que o handler chama DEPOIS de o
+    # `to_thread` ter terminado.
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(1))
+    with caplog.at_level(logging.WARNING, logger="app.endpoints"):
+        response = await _post(
+            _make_app(),
+            "/grade-preview",
+            {"exercicio": "1.1", "respostas": ["uma", "duas"]},
+        )
+    assert response.status_code == 400, response.json()
+
+    rec = next(r for r in caplog.records if r.msg == "request_rejected")
+    assert rec.exercicio == "1.1"
+    assert rec.path == "/grade-preview"
+
+
+# --- historico de notas atravessa a troca de conta ------------------------
+# Quando o professor acrescenta a conta pessoal do aluno na linha dele, as
+# submissoes que ele ja tinha feito ficam gravadas sob a conta ANTIGA. Casar
+# so a canonica esconderia o que ele entregou (e devolveria tentativas que ele
+# ja gastou), que e pior que o `not_in_roster` que o apelido veio consertar.
+
+EMAIL_APELIDO = "pessoal@uol.com.br"
+
+
+@pytest.fixture
+def roster_com_apelido() -> dict[str, RosterEntry]:
+    entry = RosterEntry(
+        email=f"{EMAIL};{EMAIL_APELIDO}",
+        nome="Aluno Fulano",
+        turma="TD-2026-01",
+        github_username=GITHUB_USERNAME,
+    )
+    return {EMAIL: entry, EMAIL_APELIDO: entry}
+
+
+@pytest.mark.asyncio
+async def test_me_grades_soma_submissoes_das_duas_contas(
+    patches, roster_com_apelido
+) -> None:
+    sheets = FakeSheets(
+        submissions_rows=[
+            [
+                "timestamp_utc",
+                "submission_id",
+                "email",
+                "nome",
+                "turma",
+                "exercicio",
+                "nota",
+                "nota_max",
+            ],
+            # gravada antes de o apelido entrar na planilha
+            ["2026-05-08T10:00:00+00:00", "u1", EMAIL_APELIDO, "x", "y", "1.1", "90", "100"],
+            ["2026-05-09T10:00:00+00:00", "u2", EMAIL, "x", "y", "1.1", "60", "100"],
+            ["2026-05-10T10:00:00+00:00", "u3", "outro@x.com", "z", "y", "1.1", "100", "100"],
+        ]
+    )
+    _patch_endpoints(patches, sheets=sheets)
+    patches.setattr(auth_module, "get_roster", lambda: roster_com_apelido)
+    response = await _get(_make_app(), "/me/grades")
+    assert response.status_code == 200
+    grades = {g["exercicio"]: g for g in response.json()["grades"]}
+    assert grades["1.1"]["num_tentativas"] == 2
+    # A MAIOR nota e a que conta, e ela esta na conta antiga.
+    assert grades["1.1"]["melhor_nota"] == 90
+
+
+def test_rate_limit_conta_as_duas_contas_do_aluno() -> None:
+    """Sem isto o cap diario viraria funcao de quantas contas o professor
+    cadastrou: 3 tentativas por conta em vez de 3 por aluno."""
+    from datetime import timezone
+
+    from app.endpoints import RATE_LIMIT_DAILY_CAP, _check_rate_limit
+
+    agora = datetime(2026, 5, 9, 20, 0, 0, tzinfo=timezone.utc)
+    header = ["timestamp_utc", "submission_id", "email", "nome", "turma", "exercicio"]
+    # O cap inteiro gasto hoje, espalhado METADE em cada conta, tudo fora do
+    # cooldown de 30s (a 1h+ de `agora`).
+    metade = RATE_LIMIT_DAILY_CAP // 2
+    rows = [header]
+    for i in range(RATE_LIMIT_DAILY_CAP):
+        conta = EMAIL if i < metade else EMAIL_APELIDO
+        rows.append([f"2026-05-09T{8 + i:02d}:00:00+00:00", f"u{i}", conta, "x", "y", "1.1"])
+
+    recusa = _check_rate_limit(rows, (EMAIL, EMAIL_APELIDO), "1.1", agora)
+    assert recusa is not None
+    assert recusa.status_code == 429
+
+    # Uma conta so enxerga metade das tentativas e liberaria mais uma.
+    assert _check_rate_limit(rows, (EMAIL,), "1.1", agora) is None
+
+
+def test_rate_limit_aceita_email_unico_como_string() -> None:
+    """Compatibilidade do call site antigo: `str` continua valendo."""
+    from datetime import timezone
+
+    from app.endpoints import _check_rate_limit
+
+    agora = datetime(2026, 5, 9, 20, 0, 0, tzinfo=timezone.utc)
+    header = ["timestamp_utc", "submission_id", "email", "nome", "turma", "exercicio"]
+    rows = [header, ["2026-05-09T19:59:50+00:00", "u1", EMAIL, "x", "y", "1.1"]]
+    recusa = _check_rate_limit(rows, EMAIL, "1.1", agora)
+    assert recusa is not None  # cooldown de 30s
+    assert recusa.status_code == 429

@@ -221,3 +221,97 @@ def test_normalize_email_preserva_ponto_e_plus():
     from app.roster import normalize_email
 
     assert normalize_email("A.B+turma@Presidencia.gov.br") == "a.b+turma@presidencia.gov.br"
+
+
+# --- coluna `email` com mais de uma conta Google ----------------------------
+# Incidente real (IA-2026-01, 16-18/09/2026): 5 alunos levaram
+# `403 not_in_roster` com o email certo na tela. Estavam TODOS na planilha —
+# com a conta institucional que a secretaria mandou, enquanto o `autograde
+# login` deles saiu da conta pessoal. Exemplos medidos no histórico da
+# planilha: `ricardo.c.costa@caixa.gov.br` vs `rick.palmeiras@uol.com.br`,
+# `giovanni.cardoso@presidencia.gov.br` vs `giovannibrigido@gmail.com`,
+# `tiago.cardoso@embrapii.org.br` vs `tiagocardosos@gmail.com`. Cadastrar uma
+# conta só é apostar em qual delas o aluno vai usar.
+
+
+@pytest.mark.parametrize(
+    "raw,esperado",
+    [
+        ("ana@idp.edu.br", ("ana@idp.edu.br",)),
+        (
+            "ricardo.c.costa@caixa.gov.br;rick.palmeiras@uol.com.br",
+            ("ricardo.c.costa@caixa.gov.br", "rick.palmeiras@uol.com.br"),
+        ),
+        ("a@x.br, b@y.com", ("a@x.br", "b@y.com")),
+        ("a@x.br|b@y.com", ("a@x.br", "b@y.com")),
+        # CAIXA ALTA e espaço NO MEIO da lista, não só nas pontas: a célula é
+        # digitada à mão e foi exatamente assim que o incidente do CAIXA ALTA
+        # entrou na planilha.
+        ("  A@X.BR ;; B@Y.COM  ", ("a@x.br", "b@y.com")),
+        ("a@x.br;A@X.BR", ("a@x.br",)),  # dedupe
+        ("", ()),
+        (";;", ()),
+    ],
+)
+def test_split_emails(raw, esperado):
+    assert roster.split_emails(raw) == esperado
+
+
+def test_parse_roster_indexa_por_todas_as_contas():
+    """O bug de 16/09 em uma linha: o aluno loga pela pessoal e tem que achar
+    a linha cadastrada pela institucional."""
+    result = parse_roster(
+        "email,nome,turma,github_username\n"
+        "ricardo.c.costa@caixa.gov.br;rick.palmeiras@uol.com.br,"
+        "Ricardo Costa,IA-2026-01,rickpalmeiras-design\n"
+    )
+    institucional = result["ricardo.c.costa@caixa.gov.br"]
+    pessoal = result["rick.palmeiras@uol.com.br"]
+    # MESMA entrada, não uma cópia: duas identidades para a mesma pessoa é
+    # justamente o que parte o histórico de notas em dois.
+    assert institucional is pessoal
+    assert institucional.turmas == ("IA-2026-01",)
+    assert institucional.github_username == "rickpalmeiras-design"
+
+
+def test_roster_entry_expoe_emails_com_canonica_primeiro():
+    result = parse_roster(
+        "email,nome,turma,github_username\n"
+        "inst@caixa.gov.br;pessoal@uol.com.br,Aluno,IA-2026-01,fulano\n"
+    )
+    entry = result["pessoal@uol.com.br"]
+    assert entry.emails == ("inst@caixa.gov.br", "pessoal@uol.com.br")
+    # A canônica é a PRIMEIRA — é ela que vai para a planilha de submissões.
+    assert entry.emails[0] == "inst@caixa.gov.br"
+
+
+def test_parse_roster_conta_repetida_entre_linhas_raises():
+    """Apelido de um aluno que é a conta canônica de outro: ninguém sabe qual
+    linha manda, e o parser recusa antes de a nota ir para a pessoa errada."""
+    csv_text = (
+        "email,nome,turma,github_username\n"
+        "ana@idp.edu.br,Ana,TD-2026-01,ana\n"
+        "beto@idp.edu.br;ANA@IDP.EDU.BR,Beto,TD-2026-01,beto\n"
+    )
+    with pytest.raises(RosterValidationError, match="duplicado.*ana@idp.edu.br"):
+        parse_roster(csv_text)
+
+
+def test_parse_roster_rejeita_celula_de_email_so_com_separadores():
+    """`;;` passa o check de 'não vazio' por strip e não produz conta nenhuma:
+    sem este guarda a linha entraria no roster inalcançável por qualquer
+    login."""
+    csv_text = (
+        "email,nome,turma,github_username\n"
+        ";;,Ana Silva,TD-2026-01,anasilva\n"
+    )
+    with pytest.raises(RosterValidationError, match="row 2.*email.*vazio"):
+        parse_roster(csv_text)
+
+
+def test_parse_roster_uma_conta_por_linha_nao_muda_nada():
+    """Regressão inversa: a planilha de hoje não tem apelido em linha nenhuma,
+    e o `email` da entrada tem que continuar sendo o email simples."""
+    result = parse_roster(HAPPY_CSV)
+    assert result["ana@idp.edu.br"].email == "ana@idp.edu.br"
+    assert result["ana@idp.edu.br"].emails == ("ana@idp.edu.br",)

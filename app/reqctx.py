@@ -26,6 +26,16 @@ from contextvars import ContextVar
 current_email: ContextVar[str] = ContextVar("current_email", default="")
 current_correlation_id: ContextVar[str] = ContextVar("current_correlation_id", default="")
 current_path: ContextVar[str] = ContextVar("current_path", default="")
+# Id do exercício da requisição. Vazio nas rotas que não têm um (`/me/identity`,
+# `/me/profile`).
+#
+# Motivação (incidente de 2026-09): `turma_not_eligible` e `exercise_not_open_yet`
+# são recusas que só fazem sentido com o exercício ao lado — "o aluno X não pode
+# fazer" é metade da frase, e sem a outra metade não há como distinguir "a turma
+# dele está errada no roster" de "ele digitou `1.1` no lugar de `ia-1.1`". Dois
+# alunos ficaram com a causa indeterminável na investigação por falta exatamente
+# deste campo, com `error`, `email` e `path` todos presentes no log.
+current_exercicio: ContextVar[str] = ContextVar("current_exercicio", default="")
 
 
 def snapshot() -> dict[str, str]:
@@ -44,4 +54,7 @@ def snapshot() -> dict[str, str]:
     path = current_path.get()
     if path:
         out["path"] = path
+    exercicio = current_exercicio.get()
+    if exercicio:
+        out["exercicio"] = exercicio
     return out

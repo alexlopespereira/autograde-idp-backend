@@ -1,0 +1,67 @@
+name: audit-planilhas
+
+# Audita as duas fontes de verdade que NAO passam por PR: a Roster Sheet
+# (editada a mao) e os `turmas/<TURMA>.yaml` (buscados da main a cada
+# submissao). Nenhuma das duas tem suite no repo, e as duas ja quebraram:
+#
+#  - 21 alunos de IA-2026-01 em CAIXA ALTA -> `403 not_in_roster` vendo o
+#    proprio email correto. Nove falhas no Cloud Logging sem ninguem olhar; o
+#    caso andou quando um aluno escreveu, duas vezes.
+#  - autofill do Sheets incrementou a coluna `turma` de 29 alunos de TD
+#    (`IA-2026-02`, `-03`, ... `-30`). Ficou 13h assim. Dano zero porque
+#    ninguem de TD tentou submeter nessas 13h — sorte, nao controle.
+#
+# O ponto do cron e exatamente esse: as duas checagens existiam e passavam,
+# rodadas a mao, quando alguem lembrava. O sinal so vale se chegar antes do
+# aluno.
+#
+# Alerta: workflow agendado que FALHA gera email do GitHub para o dono do repo
+# automaticamente — nao ha nada a configurar. `exit 1` do script (aluno
+# bloqueado agora, ou a caminho) e o que dispara. Aviso nao falha o job de
+# proposito: prazo vencido depois da aula e estado normal, e um job
+# permanentemente vermelho deixa de ser lido.
+#
+# Nao precisa de credencial de nuvem: o CSV do roster e publicado (o proprio
+# backend o busca sem token) e os YAMLs vem do raw.githubusercontent publico.
+# So `ROSTER_URL` e secret, e so porque a URL identifica a planilha.
+
+on:
+  schedule:
+    # 11:00 UTC = 08:00 BRT, diariamente: pega o estrago da noite anterior
+    # antes de a turma voltar a mexer.
+    - cron: "0 11 * * *"
+  workflow_dispatch:
+  # Tambem em PR que mexa nos parsers ou no proprio audit: o script importa
+  # `parse_roster` e `parse_calendario` de verdade, entao mudanca neles pode
+  # passar a recusar a planilha que esta no ar.
+  pull_request:
+    paths:
+      - "app/roster.py"
+      - "app/calendario.py"
+      - "scripts/audit_planilhas.py"
+      - ".github/workflows/audit-planilhas.yml"
+
+jobs:
+  audit:
+    name: roster + calendarios
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install (editable)
+        run: python -m pip install -e .
+
+      - name: Audit
+        env:
+          ROSTER_URL: ${{ secrets.ROSTER_URL }}
+          # Literais, espelhando `cloud-run-deploy.yml`. Ao adicionar curso,
+          # este e um quarto lugar para atualizar.
+          EXERCISES_BASE_URL: https://raw.githubusercontent.com/alexlopespereira/idp_governodigital/main/exercicios
+          EXERCISES_BASE_URL_IA: https://raw.githubusercontent.com/alexlopespereira/idp_agentes_ia/main/exercicios
+        run: python scripts/audit_planilhas.py
