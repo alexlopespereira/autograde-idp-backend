@@ -573,6 +573,11 @@ def _validate_and_grade(
 
 @router.post("/grade-preview")
 async def grade_preview(body: GradeRequestBody, request: Request) -> Any:
+    # Antes do `to_thread`, de proposito: `asyncio.to_thread` COPIA o contexto
+    # para a thread, entao o que for setado lá dentro nao volta para este
+    # handler — e as recusas de rate-limit abaixo sao emitidas aqui, fora da
+    # thread. Setando antes, os dois lados veem o exercicio.
+    reqctx.current_exercicio.set(body.exercicio)
     validated = await asyncio.to_thread(_validate_and_grade, request, body)
     if isinstance(validated, JSONResponse):
         return validated
@@ -811,6 +816,11 @@ def _grade_one_sql(dataset: DatasetSql | None, pergunta: Pergunta, resposta: str
 
 @router.post("/submissions")
 async def submissions(body: SubmissionRequestBody, request: Request) -> Any:
+    # Antes do `to_thread`, de proposito: `asyncio.to_thread` COPIA o contexto
+    # para a thread, entao o que for setado lá dentro nao volta para este
+    # handler — e as recusas de rate-limit abaixo sao emitidas aqui, fora da
+    # thread. Setando antes, os dois lados veem o exercicio.
+    reqctx.current_exercicio.set(body.exercicio)
     validated = await asyncio.to_thread(_validate_and_grade, request, body)
     if isinstance(validated, JSONResponse):
         return validated

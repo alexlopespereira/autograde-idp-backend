@@ -1605,6 +1605,60 @@ async def test_log_de_recusa_nao_vaza_a_message(patches, caplog) -> None:
     assert "outra-pessoa" not in str(getattr(rec, "error", ""))
 
 
+# --- o exercicio na recusa ------------------------------------------------
+# Complemento do bloco acima: `error` + `email` + `path` responderam "quem
+# falhou", mas nao "em que". Para `turma_not_eligible` e
+# `exercise_not_open_yet` isso deixa a causa indeterminavel — na investigacao
+# de setembro/2026 nao foi possivel dizer se o aluno estava com a turma errada
+# no roster ou se tinha digitado `1.1` no lugar de `ia-1.1`, porque o id do
+# exercicio nao estava em lugar nenhum do log.
+
+
+@pytest.mark.asyncio
+async def test_recusa_loga_o_exercicio(patches, caplog) -> None:
+    import logging
+
+    _patch_endpoints(patches, exercise=_make_exercise(requer_repositorio=True))
+    with caplog.at_level(logging.WARNING, logger="app.endpoints"):
+        response = await _post(
+            _make_app(),
+            "/grade-preview",
+            {"exercicio": "1.1", "repo_url": "https://github.com/outra-pessoa/projeto"},
+        )
+    assert response.status_code == 403
+
+    rec = next(r for r in caplog.records if r.msg == "request_rejected")
+    assert rec.exercicio == "1.1"
+
+
+@pytest.mark.asyncio
+async def test_recusa_emitida_fora_da_thread_tambem_loga_o_exercicio(
+    patches, caplog
+) -> None:
+    """Guarda de regressao do detalhe que quebraria isto em silencio:
+    `_validate_and_grade` roda em `asyncio.to_thread`, que COPIA o contexto.
+    Setar o contextvar lá dentro faria as recusas do proprio handler (as de
+    rate-limit, emitidas fora da thread) sairem sem o exercicio. Este teste
+    exercita uma recusa do lado de fora."""
+    import logging
+
+    # 1 pergunta no exercicio, 2 respostas no body -> `respostas_mismatch`,
+    # recusado por `_validate_respostas`, que o handler chama DEPOIS de o
+    # `to_thread` ter terminado.
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(1))
+    with caplog.at_level(logging.WARNING, logger="app.endpoints"):
+        response = await _post(
+            _make_app(),
+            "/grade-preview",
+            {"exercicio": "1.1", "respostas": ["uma", "duas"]},
+        )
+    assert response.status_code == 400, response.json()
+
+    rec = next(r for r in caplog.records if r.msg == "request_rejected")
+    assert rec.exercicio == "1.1"
+    assert rec.path == "/grade-preview"
+
+
 # --- historico de notas atravessa a troca de conta ------------------------
 # Quando o professor acrescenta a conta pessoal do aluno na linha dele, as
 # submissoes que ele ja tinha feito ficam gravadas sob a conta ANTIGA. Casar
