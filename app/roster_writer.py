@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import google.auth
 from googleapiclient.discovery import Resource, build
 
-from app.roster import normalize_email
+from app.roster import normalize_email, split_emails
 
 SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
 EMAIL_COLUMN_RANGE = "A:A"
@@ -61,10 +61,15 @@ class RosterWriter:
             .execute()
         )
         values = resp.get("values", []) or []
+        alvo = normalize_email(email)
         for i, row in enumerate(values):
             if i == 0:
                 continue
-            if row and normalize_email(row[0]) == normalize_email(email):
+            # A celula pode listar varias contas (`institucional@x;pessoal@y`).
+            # Comparar a celula inteira faria `autograde perfil` estourar
+            # `UserNotInRoster` justamente para o aluno que precisou do apelido
+            # — e ele acabou de autenticar, entao o erro seria incompreensivel.
+            if row and alvo in split_emails(row[0]):
                 return i + 1
         return None
 

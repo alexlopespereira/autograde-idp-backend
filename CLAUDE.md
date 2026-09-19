@@ -56,8 +56,8 @@ Sistema de plugin via registry: `register("name")` decora `(args, evidence) → 
 `AuthMiddleware` (Starlette) intercepta tudo exceto `PUBLIC_PATHS = {"/healthz", "/oauth/exchange", "/oauth/refresh"}`. Fluxo:
 
 1. Verifica `Authorization: Bearer <id_token>` via `google.oauth2.id_token` com audience = `GOOGLE_OAUTH_CLIENT_ID`.
-2. Carrega roster (CSV publicado da Roster Sheet, cache TTL 300s em `app.roster._CACHE`).
-3. Email não no roster → `403 not_in_roster`.
+2. Carrega roster (CSV publicado da Roster Sheet, cache TTL 300s em `app.roster._CACHE`). O dict é indexado pela **conta**, não pelo aluno: a coluna `email` aceita N contas separadas por `;` (mesmo separador da coluna `turma`) e cada uma aponta pro **mesmo** `RosterEntry`.
+3. Email não no roster → `403 not_in_roster`. Foi a falha mais frequente de setembro/2026 (5 alunos em 4 dias) e nunca por email errado: o aluno estava cadastrado com a conta **institucional** e logava com a **pessoal**, ou o contrário. Daí o multi-conta — o conserto não é escolher uma, é listar as duas. A **primeira** conta da célula é a canônica: é ela que vai pro `user.email`, pra Submissions Sheet, pro `reqctx` e pro log. Consequência operacional: ao acrescentar conta, **anexe no fim**; reordenar a célula reescreve a identidade do aluno e órfã as notas já gravadas (`/me/grades` e o rate-limit somam todas as contas, então elas continuam sendo lidas — mas a coluna `email` da planilha passa a divergir). `user.emails` expõe a tupla completa pra quem precisa comparar contra dado histórico.
 4. Anexa `request.state.user = AuthenticatedUser(google, roster)` e `request.state.correlation_id`. Toda resposta inclui header `X-Correlation-Id`.
 
 Endpoints downstream sempre leem `request.state.user.email` / `.github_username` / `.turma` / `.roster.nome` — **nunca** confiar em campos do body pra identidade.
@@ -71,7 +71,7 @@ Backend faz proxy do `/token` do Google (Device Flow) pra não vazar `GOOGLE_OAU
 Dois writers, contratos diferentes — **não unificar** (decisão consciente no prd.json US-02).
 
 - `SheetsWriter` → tabs `submissoes` (20 colunas, schema em `COLUMNS`) e `previews` (3 colunas, pra rate-limit do preview-com-Gemini). Idempotência por `submission_id` (lê coluna B antes de append). Telemetria de row-count antes/depois detecta `SHEETS_DROP_DETECTED` (Sheets API às vezes silenciosamente perde appends). `asyncio.Lock` module-level serializa appends — funciona porque Cloud Run roda `--max-instances=1` (um único event loop).
-- `RosterWriter` → escreve `nome` e `github_username` na Roster Sheet via `POST /me/profile`. **Anti-hijacking**: só atualiza célula se está vazia. `valueInputOption='RAW'` (string `=BAR()` não vira fórmula). Retorna `ProfileUpdateResult(updated, skipped)`. Endpoint invalida `app.roster._clear_cache()` pós-update.
+- `RosterWriter` → escreve `nome` e `github_username` na Roster Sheet via `POST /me/profile`. **Anti-hijacking**: só atualiza célula se está vazia. `get_row_index` casa a conta contra `split_emails(row[0])`, não contra a célula inteira: comparando a célula, `autograde perfil` levantaria `UserNotInRoster` exatamente para o aluno que precisou do multi-conta. `valueInputOption='RAW'` (string `=BAR()` não vira fórmula). Retorna `ProfileUpdateResult(updated, skipped)`. Endpoint invalida `app.roster._clear_cache()` pós-update.
 
 Auth pra Sheets: `google.auth.default()` (ADC). Em produção usa SA do Cloud Run; em dev usa `gcloud auth application-default login`.
 

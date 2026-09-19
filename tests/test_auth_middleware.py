@@ -357,3 +357,124 @@ async def test_contexto_de_identidade_chega_no_handler(patch_auth) -> None:
     assert visto["email"] == EMAIL_IN_ROSTER
     assert visto["path"] == "/espia"
     assert visto["correlation_id"] == response.headers["X-Correlation-Id"]
+
+
+# --- login por conta alternativa (coluna `email` com mais de uma conta) -----
+# Incidente de 16-18/09/2026: o aluno estava na planilha pela conta
+# institucional e fez `autograde login` pela pessoal. Mesma forma do bug do
+# CAIXA ALTA — planilha e id_token divergindo — e mesmo sintoma para o aluno:
+# `403 not_in_roster` com o email correto na tela.
+
+EMAIL_INSTITUCIONAL = "ricardo.c.costa@caixa.gov.br"
+EMAIL_PESSOAL = "rick.palmeiras@uol.com.br"
+
+
+def _roster_com_apelido() -> dict[str, RosterEntry]:
+    from app.roster import parse_roster
+
+    return parse_roster(
+        "email,nome,turma,github_username\n"
+        f"{EMAIL_INSTITUCIONAL};{EMAIL_PESSOAL},Ricardo Costa,IA-2026-01,rick-gh\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_login_pela_conta_pessoal_autentica_quando_a_planilha_lista_as_duas(
+    monkeypatch,
+) -> None:
+    """Ponta a ponta do bug real: CSV cru com duas contas -> parse_roster ->
+    middleware -> 200 para o login feito pela SEGUNDA delas."""
+    roster = _roster_com_apelido()
+
+    def fake_verify(token: str, request_obj, audience: str):
+        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"], audience=audience)
+
+    monkeypatch.setattr(auth_module.id_token, "verify_oauth2_token", fake_verify)
+    monkeypatch.setattr(auth_module, "get_roster", lambda: roster)
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", JWT_AUDIENCE)
+
+    token = _make_token(EMAIL_PESSOAL)
+    response = await _request(
+        _make_app(), "/protected", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200, response.json()
+    # A identidade que atravessa o request é a CANÔNICA (a primeira da célula),
+    # não a conta com que ele logou: é ela que vai para a planilha de
+    # submissões, e trocar isso partiria o histórico de notas em dois alunos.
+    assert response.json()["email"] == EMAIL_INSTITUCIONAL
+    assert response.json()["github"] == "rick-gh"
+
+
+@pytest.mark.asyncio
+async def test_login_pela_conta_canonica_continua_autenticando(monkeypatch) -> None:
+    roster = _roster_com_apelido()
+
+    def fake_verify(token: str, request_obj, audience: str):
+        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"], audience=audience)
+
+    monkeypatch.setattr(auth_module.id_token, "verify_oauth2_token", fake_verify)
+    monkeypatch.setattr(auth_module, "get_roster", lambda: roster)
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", JWT_AUDIENCE)
+
+    token = _make_token(EMAIL_INSTITUCIONAL)
+    response = await _request(
+        _make_app(), "/protected", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["email"] == EMAIL_INSTITUCIONAL
+
+
+@pytest.mark.asyncio
+async def test_conta_fora_da_celula_continua_403(monkeypatch) -> None:
+    """O apelido não afrouxa a porta: conta que não está na célula segue fora."""
+    roster = _roster_com_apelido()
+
+    def fake_verify(token: str, request_obj, audience: str):
+        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"], audience=audience)
+
+    monkeypatch.setattr(auth_module.id_token, "verify_oauth2_token", fake_verify)
+    monkeypatch.setattr(auth_module, "get_roster", lambda: roster)
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", JWT_AUDIENCE)
+
+    token = _make_token("estranho@gmail.com")
+    response = await _request(
+        _make_app(), "/protected", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 403
+    assert response.json()["error"] == "not_in_roster"
+
+
+@pytest.mark.asyncio
+async def test_log_usa_a_conta_canonica_e_nao_a_do_login(monkeypatch, caplog) -> None:
+    """Sem isto a mesma pessoa aparece com duas identidades no Cloud Logging,
+    que é justamente o que travou a investigação do incidente."""
+    import logging
+
+    from app import reqctx
+
+    roster = _roster_com_apelido()
+
+    def fake_verify(token: str, request_obj, audience: str):
+        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"], audience=audience)
+
+    monkeypatch.setattr(auth_module.id_token, "verify_oauth2_token", fake_verify)
+    monkeypatch.setattr(auth_module, "get_roster", lambda: roster)
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", JWT_AUDIENCE)
+
+    vistos: list[str] = []
+
+    app = FastAPI()
+    app.add_middleware(AuthMiddleware)
+
+    @app.get("/protected")
+    async def protected(request: Request) -> dict[str, str]:
+        vistos.append(reqctx.current_email.get())
+        return {"ok": "1"}
+
+    token = _make_token(EMAIL_PESSOAL)
+    with caplog.at_level(logging.INFO, logger="app.auth"):
+        response = await _request(
+            app, "/protected", headers={"Authorization": f"Bearer {token}"}
+        )
+    assert response.status_code == 200, response.json()
+    assert vistos == [EMAIL_INSTITUCIONAL]

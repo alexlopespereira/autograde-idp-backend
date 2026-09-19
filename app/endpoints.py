@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 from typing import Any
@@ -591,7 +592,7 @@ async def grade_preview(body: GradeRequestBody, request: Request) -> Any:
         preview_rows = await writer.read_previews()
         rl = _check_rate_limit(
             preview_rows,
-            user.email,
+            user.emails,
             body.exercicio,
             submitted_at,
             timestamp_col=PREVIEW_TIMESTAMP_COL_IDX,
@@ -656,7 +657,7 @@ def _today_local(now: datetime) -> date:
 
 def _check_rate_limit(
     rows: list[list[str]],
-    email: str,
+    emails: str | Sequence[str],
     exercicio: str,
     now: datetime,
     *,
@@ -670,15 +671,26 @@ def _check_rate_limit(
     Usado tanto pra submissoes (cols 0/2/5) quanto pra previews (cols 0/1/2).
     Coluna `timestamp_col` deve ser ISO8601 com timezone (UTC preferido).
     Emails na allowlist `RATE_LIMIT_BYPASS_EMAILS` pulam direto (testing).
+
+    `emails` e o conjunto de contas do aluno (`user.emails`), nao uma so: um
+    aluno com institucional E pessoal na planilha gastaria 3 tentativas por
+    conta se a contagem casasse apenas a canonica — o cap diario viraria
+    funcao de quantas contas o professor cadastrou. Aceita `str` tambem para
+    os call sites de teste que passam um email cru.
     """
-    if email.lower() in _bypass_rate_limit_emails():
+    contas = (
+        (normalize_email(emails),)
+        if isinstance(emails, str)
+        else tuple(normalize_email(e) for e in emails)
+    )
+    if any(conta in _bypass_rate_limit_emails() for conta in contas):
         return None
     today = _today_local(now)
     count_today = 0
     for r in rows[1:]:  # pula header
         if len(r) <= max(email_col, exercicio_col, timestamp_col):
             continue
-        if normalize_email(r[email_col]) != normalize_email(email) or r[exercicio_col] != exercicio:
+        if normalize_email(r[email_col]) not in contas or r[exercicio_col] != exercicio:
             continue
         try:
             row_ts = datetime.fromisoformat(r[timestamp_col])
@@ -815,7 +827,7 @@ async def submissions(body: SubmissionRequestBody, request: Request) -> Any:
 
     if exercise.perguntas:
         rows = await writer.read_submissions()
-        rate_limit_err = _check_rate_limit(rows, user.email, body.exercicio, submitted_at)
+        rate_limit_err = _check_rate_limit(rows, user.emails, body.exercicio, submitted_at)
         if rate_limit_err is not None:
             return rate_limit_err
         gemini_results = await asyncio.to_thread(_grade_with_gemini, exercise, respostas_clean)
@@ -893,7 +905,11 @@ async def me_grades(request: Request) -> Any:
     for row in rows:
         if len(row) <= max_idx:
             continue
-        if normalize_email(row[EMAIL_COL_IDX]) != normalize_email(user.email):
+        # Qualquer apelido do aluno, nao so a canonica: submissao gravada
+        # antes de a conta nova entrar na planilha esta sob a conta antiga, e
+        # `me_grades` que a ignorasse mostraria boletim vazio para quem ja
+        # entregou.
+        if normalize_email(row[EMAIL_COL_IDX]) not in user.emails:
             continue
         exercicio = row[EXERCICIO_COL_IDX]
         try:

@@ -35,7 +35,26 @@ class AuthenticatedUser:
 
     @property
     def email(self) -> str:
-        return self.roster.email
+        """Identidade canônica do aluno — a PRIMEIRA conta da célula.
+
+        Mesma regra de :attr:`turma`: a coluna aceita uma lista, a primeira
+        manda. O aluno pode ter logado por um apelido (`emails[1:]`), mas o
+        que atravessa o request, o log e a planilha de submissões é sempre a
+        canônica — senão o histórico de notas dele se parte em duas pessoas.
+        """
+        emails = self.roster.emails
+        return emails[0] if emails else self.roster.email
+
+    @property
+    def emails(self) -> tuple[str, ...]:
+        """Todas as contas Google deste aluno, canônica primeiro.
+
+        Quem CASA linha de planilha com aluno usa isto, não :attr:`email`:
+        submissões gravadas antes de o apelido existir estão sob a conta
+        antiga, e ignorá-las faria o aluno perder a nota que já tirou e
+        reganhar tentativas que já gastou.
+        """
+        return self.roster.emails
 
     @property
     def github_username(self) -> str:
@@ -181,15 +200,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 "Google diferente da que o professor cadastrou (ex.: gmail "
                 "pessoal no lugar do email institucional). Rode `autograde "
                 "login` de novo e escolha a conta certa; se o email estiver "
-                "certo, peca ao professor para incluir voce no roster.",
+                "certo, peca ao professor para incluir esta conta na sua linha "
+                "do roster (a coluna `email` aceita mais de uma, separadas por "
+                "`;`, para quem usa a institucional e a pessoal).",
                 email=google_user.email,
                 path=request.url.path,
             )
 
-        request.state.user = AuthenticatedUser(google=google_user, roster=entry)
-        # `entry.email` (do roster, já normalizado) e não a claim crua: é a
-        # forma canônica que o resto do sistema usa como identidade.
-        reqctx.current_email.set(entry.email)
+        user = AuthenticatedUser(google=google_user, roster=entry)
+        request.state.user = user
+        # `user.email` (a canônica do roster) e não a claim crua: é a forma
+        # canônica que o resto do sistema usa como identidade. Quando o aluno
+        # loga por um apelido, a claim e a canônica DIFEREM — e é a canônica
+        # que tem que ir para o log, senão a mesma pessoa aparece com dois
+        # nomes na investigação.
+        reqctx.current_email.set(user.email)
         logger.info(
             "auth_ok",
             extra={
