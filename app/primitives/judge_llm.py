@@ -13,6 +13,7 @@ Convenções:
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.gemini import JudgeResult, grade_artifact
@@ -614,6 +615,15 @@ def tobe_improvements(args: dict, evidence: dict) -> CriterioResult:
 # ---------------------------------------------------------------------------
 
 
+# Um degrau de escala é uma linha de lista que começa por um score:
+# "- 1.0: ...", "- 0.75: ...", "- 0,5: ...". Dois degraus = escala declarada.
+_DEGRAU_ESCALA = re.compile(r"^\s*-\s*(?:0|1)(?:[.,]\d+)?\s*:", re.M)
+
+
+def _tem_escala(rubrica: str) -> bool:
+    return len(_DEGRAU_ESCALA.findall(rubrica)) >= 2
+
+
 @register("judge.artifacts.rubric")
 def rubric(args: dict, evidence: dict) -> CriterioResult:
     """Judge genérico: a rubrica inteira vem do YAML do exercício.
@@ -650,20 +660,31 @@ def rubric(args: dict, evidence: dict) -> CriterioResult:
         entries.append((role, entry))
 
     partes = [rubrica_yaml] if rubrica_yaml else []
+    # Rubrica que traz a própria escala manda nela. Acrescentar a padrão
+    # depois dava ao juiz duas escalas contraditórias — a do YAML com degrau
+    # de 0.75 e teste de ausência, a nossa com "0.5: atende parcialmente" —, e
+    # ele alternava entre as duas de uma rodada para outra.
+    escala_propria = _tem_escala(rubrica_yaml)
     if sub_criterios:
         bullets = "\n".join(f"- {c}" for c in sub_criterios)
+        if escala_propria:
+            partes.append(
+                "Sub-critérios (aplique a escala da rubrica acima):\n" + bullets
+            )
+        else:
+            partes.append(
+                "O artefato deve atender a TODOS os sub-critérios abaixo; o "
+                "score é proporcional a quantos ele atende de forma substantiva "
+                f"(não cosmética):\n{bullets}"
+            )
+    if not escala_propria:
         partes.append(
-            "O artefato deve atender a TODOS os sub-critérios abaixo; o score é "
-            "proporcional a quantos ele atende de forma substantiva (não "
-            f"cosmética):\n{bullets}"
+            "Score:\n"
+            "- 1.0: atende tudo de forma substantiva\n"
+            "- 0.5: atende parcialmente ou de forma vaga\n"
+            "- 0.0: não atende, ou é genérico/evasivo a ponto de não dar para "
+            "verificar"
         )
-    partes.append(
-        "Score:\n"
-        "- 1.0: atende tudo de forma substantiva\n"
-        "- 0.5: atende parcialmente ou de forma vaga\n"
-        "- 0.0: não atende, ou é genérico/evasivo a ponto de não dar para "
-        "verificar"
-    )
     rubrica_text = "\n\n".join(partes)
 
     if len(entries) == 1:
