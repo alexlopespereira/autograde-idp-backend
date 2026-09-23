@@ -636,6 +636,54 @@ def test_rubric_monta_prompt_com_rubrica_e_sub_criterios(monkeypatch):
     assert capture["content"] == "texto da reflexão"
 
 
+def test_rubric_sem_escala_propria_recebe_a_padrao(monkeypatch):
+    capture: dict[str, Any] = {}
+    _stub_judge(monkeypatch, JudgeResult(1.0, "ok", "", True), capture)
+    _run(
+        "judge.artifacts.rubric",
+        {"role": "reflexao", "rubrica": "Avalie a reflexão.", "sub_criterios": ["A"]},
+        _ev(_entry("reflexao", "x")),
+    )
+    assert "0.5: atende parcialmente" in capture["rubrica"]
+    assert "proporcional" in capture["rubrica"]
+
+
+def test_rubric_com_escala_propria_nao_recebe_a_padrao(monkeypatch):
+    """Duas escalas no prompt fazem o juiz alternar entre elas (aula 5/6)."""
+    capture: dict[str, Any] = {}
+    _stub_judge(monkeypatch, JudgeResult(0.75, "ok", "", True), capture)
+    rubrica = (
+        "Avalie o mapa.\n\n"
+        "Escala:\n"
+        "- 1.0: todos os sub-critérios atendidos.\n"
+        "- 0.75: todos presentes, um no mínimo aceitável.\n"
+        "- 0,5: um ou dois AUSENTES.\n"
+        "- 0.0: vazio."
+    )
+    r = _run(
+        "judge.artifacts.rubric",
+        {"role": "mapa", "rubrica": rubrica, "sub_criterios": ["A", "B"]},
+        _ev(_entry("mapa", "x")),
+    )
+    assert r.points_earned == 8  # round(0.75 * 10)
+    assert "0.75: todos presentes" in capture["rubrica"]
+    assert "atende parcialmente" not in capture["rubrica"]
+    assert "proporcional" not in capture["rubrica"]
+    assert capture["rubrica"].count("Score:") == 0
+    assert "- A" in capture["rubrica"] and "- B" in capture["rubrica"]
+
+
+def test_rubric_numero_solto_na_rubrica_nao_e_escala(monkeypatch):
+    capture: dict[str, Any] = {}
+    _stub_judge(monkeypatch, JudgeResult(1.0, "ok", "", True), capture)
+    _run(
+        "judge.artifacts.rubric",
+        {"role": "r", "rubrica": "Exija 1.0 ponto por item.\n- 1 item: basta"},
+        _ev(_entry("r", "x")),
+    )
+    assert "atende parcialmente" in capture["rubrica"]
+
+
 def test_rubric_multi_role_concatena_artefatos(monkeypatch):
     capture: dict[str, Any] = {}
     _stub_judge(monkeypatch, JudgeResult(1.0, "ok", "", True), capture)
