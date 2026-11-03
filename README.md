@@ -63,6 +63,8 @@ CI deploy automático em push pra `main` está em `.github/workflows/cloud-run-d
 |---|---|---|
 | `GOOGLE_OAUTH_CLIENT_ID` | OAuth Client (Device Flow) | não |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | OAuth Client | sim — secret |
+| `OPENAI_API_KEY` | Secret Manager `OPENAI_API_KEY:latest` (avaliação de respostas e artefatos) | sim — secret |
+| `GEMINI_API_KEY` | Secret Manager `gemini-api-key:latest` (geração SQL) | sim — secret |
 | `GITHUB_PAT` | GitHub PAT classic | sim — secret |
 | `ROSTER_URL` | Roster Sheet pública | não |
 | `SHEET_ID` | Submissions Sheet | não |
@@ -93,6 +95,24 @@ A coluna `curso` (T) na Submissions Sheet é derivada do prefixo e serve pra
 filtro/pivot — não é a fonte da unicidade.
 
 ---
+
+### Modelo dos avaliadores
+
+Respostas discursivas e artefatos por rubrica usam `gpt-6-luna` na OpenAI
+Responses API, com raciocínio `low`, JSON Schema estrito, `store=false`,
+limite de 4096 tokens de saída (incluindo raciocínio) e timeout de 30s.
+`gpt-6.1-luna` não é o identificador publicado do modelo.
+A geração de SQL continua usando `gemini-2.5-flash-lite`.
+
+O módulo `app/gemini.py` e o tipo `GeminiResult` mantêm seus nomes por
+compatibilidade. Falhas do avaliador continuam sinalizadas como degradadas,
+com nota máxima provisória; incompletude e recusa nunca viram nota definitiva.
+Não há fallback automático para outro modelo.
+
+Antes de ativar: validar a chave e acesso ao modelo, testar ambos os avaliadores
+com respostas sintéticas e confirmar `ok=True`; só então publicar no Cloud Run.
+A service account do Cloud Run precisa de `roles/secretmanager.secretAccessor`
+no secret `OPENAI_API_KEY`.
 
 ## Licença
 

@@ -9,12 +9,11 @@ import pytest
 import requests
 
 from app.gemini import (
-    GEMINI_API_URL,
     GeminiResult,
-    _gemini_response_stub,
     grade_resposta,
     grade_respostas,
 )
+from app.openai_grader import OPENAI_API_URL
 
 
 class FakeResp:
@@ -29,16 +28,24 @@ class FakeResp:
         return self._body
 
 
+def _openai_response_stub(text):
+    return {"status": "completed", "output": [
+        {"type": "reasoning"},
+        {"type": "message", "content": [{"type": "output_text", "text": text}]},
+    ]}
+
+
 def _ok_response(nota: int, feedback: str = "ótimo") -> FakeResp:
     payload_text = json.dumps({"nota": nota, "feedback": feedback})
-    return FakeResp(200, body=_gemini_response_stub(payload_text))
+    return FakeResp(200, body=_openai_response_stub(payload_text))
 
 
 def test_grade_resposta_happy_path():
     captured: dict[str, Any] = {}
 
-    def fake_post(url: str, json: dict[str, Any], timeout: int) -> FakeResp:
+    def fake_post(url: str, json: dict[str, Any], timeout: int, headers: dict) -> FakeResp:
         captured["url"] = url
+        captured["headers"] = headers
         captured["body"] = json
         return _ok_response(nota=8, feedback="boa explicação")
 
@@ -51,9 +58,12 @@ def test_grade_resposta_happy_path():
         http_post=fake_post,
     )
     assert result == GeminiResult(nota=8, feedback="boa explicação", ok=True)
-    assert GEMINI_API_URL in captured["url"]
-    assert "fake-key" in captured["url"]
-    assert captured["body"]["generationConfig"]["responseMimeType"] == "application/json"
+    assert captured["url"] == OPENAI_API_URL
+    assert "fake-key" not in captured["url"]
+    assert captured["headers"]["Authorization"] == "Bearer fake-key"
+    assert captured["body"]["text"]["format"]["strict"] is True
+    assert captured["body"]["model"] == "gpt-6-luna"
+    assert captured["body"]["store"] is False
 
 
 def test_grade_resposta_clamps_above_peso():
@@ -77,7 +87,7 @@ def test_grade_resposta_fallback_no_api_key():
     result = grade_resposta("q", "c", "r", peso=10, api_key="", http_post=lambda *_a, **_k: None)  # type: ignore[arg-type]
     assert result.ok is False
     assert result.nota == 10  # peso máximo (não punir)
-    assert "GEMINI_API_KEY" in result.feedback
+    assert "OPENAI_API_KEY" in result.feedback
 
 
 def test_grade_resposta_fallback_http_error():
@@ -102,7 +112,7 @@ def test_grade_resposta_fallback_network_error():
 
 def test_grade_resposta_fallback_malformed_json():
     def fake_post(*_a: Any, **_k: Any) -> FakeResp:
-        return FakeResp(200, body=_gemini_response_stub("isso nao eh json"))
+        return FakeResp(200, body=_openai_response_stub("isso nao eh json"))
 
     result = grade_resposta("q", "c", "r", peso=10, api_key="k", http_post=fake_post)
     assert result.ok is False
@@ -120,15 +130,16 @@ def test_grade_resposta_fallback_missing_candidates():
 
 
 def test_grade_resposta_uses_env_var_when_api_key_none(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "env-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
     captured: dict[str, Any] = {}
 
-    def fake_post(url: str, json: dict[str, Any], timeout: int) -> FakeResp:
+    def fake_post(url: str, json: dict[str, Any], timeout: int, headers: dict) -> FakeResp:
         captured["url"] = url
+        captured["headers"] = headers
         return _ok_response(nota=5)
 
     grade_resposta("q", "c", "r", peso=10, http_post=fake_post)
-    assert "env-key" in captured["url"]
+    assert captured["headers"]["Authorization"] == "Bearer env-key"
 
 
 def test_grade_respostas_returns_one_per_input():

@@ -1,23 +1,23 @@
-"""Gemini API client para gradear respostas subjetivas de exercícios.
+"""Avaliadores OpenAI e gerador SQL Gemini (nome de módulo legado).
 
-Chama `generateContent` no `gemini-2.5-flash-lite` com structured output (JSON
-schema) pra retornar `{nota: int, feedback: str}`. Fallback em caso de
-qualquer falha: nota máxima + flag `ok=False` pra log. Decisão: não punir
-aluno por bug nosso (princípio: falha do grader → benefício da dúvida).
-
-Princípio 11 CLAUDE.md: chamada cobrada (Gemini flash é barato mas tem
-custo financeiro). Caller controla rate-limit antes de chamar.
+Respostas curtas e artefatos usam GPT-6 Luna com JSON Schema estrito.
+Os nomes GeminiResult e deste módulo ficam por compatibilidade com callers.
+Falha de infraestrutura preserva nota provisória máxima e ok=False.
+A geração SQL continua usando Gemini, separadamente dos avaliadores.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from dataclasses import dataclass
 from typing import Any, Callable
 
 import requests
+
+from .openai_grader import OPENAI_API_URL, OPENAI_TIMEOUT_SECONDS, build_payload, response_text
 
 log = logging.getLogger(__name__)
 
@@ -66,61 +66,51 @@ def grade_resposta(
     api_key: str | None = None,
     http_post: Callable[..., requests.Response] = requests.post,
 ) -> GeminiResult:
-    """Avalia uma resposta via Gemini. Retorna nota inteira [0, peso] + feedback.
+    """Avalia uma resposta via OpenAI. Retorna nota inteira [0, peso] + feedback.
 
     Em qualquer falha (sem API key, HTTP error, JSON inválido, nota fora de range)
     retorna fallback: nota=peso (máxima), feedback descrevendo o erro, ok=False.
     """
-    key = api_key if api_key is not None else os.environ.get("GEMINI_API_KEY", "")
+    key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY", "")
     if not key:
-        log.error("gemini_unavailable reason=missing_api_key")
+        log.error("openai_unavailable reason=missing_api_key")
         return GeminiResult(
-            nota=peso, feedback="gemini_unavailable: GEMINI_API_KEY ausente", ok=False
+            nota=peso, feedback="openai_unavailable: OPENAI_API_KEY ausente", ok=False
         )
 
     prompt = _build_prompt(texto_pergunta, criterios_avaliacao, resposta_aluno, peso)
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "responseMimeType": "application/json",
-            "responseSchema": {
-                "type": "object",
-                "properties": {
-                    "nota": {"type": "integer"},
-                    "feedback": {"type": "string"},
-                },
-                "required": ["nota", "feedback"],
-            },
-            "temperature": 0.2,
-        },
-    }
+    payload = build_payload(prompt, "grade_resposta", {
+        "nota": {"type": "integer"},
+        "feedback": {"type": "string"},
+    })
     try:
         resp = http_post(
-            f"{GEMINI_API_URL}?key={key}",
+            OPENAI_API_URL,
+            headers={"Authorization": f"Bearer {key}"},
             json=payload,
-            timeout=GEMINI_TIMEOUT_SECONDS,
+            timeout=OPENAI_TIMEOUT_SECONDS,
         )
     except requests.RequestException as exc:
-        log.error("gemini_unavailable reason=network err=%s", exc)
-        return GeminiResult(nota=peso, feedback=f"gemini_unavailable: rede ({exc})", ok=False)
+        log.error("openai_unavailable reason=network err=%s", exc)
+        return GeminiResult(nota=peso, feedback=f"openai_unavailable: rede ({exc})", ok=False)
 
     if resp.status_code != 200:
         log.error(
-            "gemini_unavailable reason=http status=%d body=%s", resp.status_code, resp.text[:200]
+            "openai_unavailable reason=http status=%d", resp.status_code
         )
         return GeminiResult(
-            nota=peso, feedback=f"gemini_unavailable: HTTP {resp.status_code}", ok=False
+            nota=peso, feedback=f"openai_unavailable: HTTP {resp.status_code}", ok=False
         )
 
     try:
         body = resp.json()
-        text = body["candidates"][0]["content"]["parts"][0]["text"]
+        text = response_text(body)
         parsed = json.loads(text)
         nota_raw = int(parsed["nota"])
         feedback = str(parsed.get("feedback", "")).strip()[:600]
     except (KeyError, IndexError, ValueError, TypeError) as exc:
-        log.error("gemini_unavailable reason=parse err=%s body=%s", exc, resp.text[:200])
-        return GeminiResult(nota=peso, feedback=f"gemini_unavailable: parse ({exc})", ok=False)
+        log.error("openai_unavailable reason=parse err=%s body=%s", exc, "[omitido]")
+        return GeminiResult(nota=peso, feedback=f"openai_unavailable: parse ({exc})", ok=False)
 
     if nota_raw < 0:
         nota = 0
@@ -129,7 +119,7 @@ def grade_resposta(
     else:
         nota = nota_raw
 
-    log.info("gemini_ok peso=%d nota=%d feedback_len=%d", peso, nota, len(feedback))
+    log.info("openai_ok peso=%d nota=%d feedback_len=%d", peso, nota, len(feedback))
     return GeminiResult(nota=nota, feedback=feedback or "(sem feedback)", ok=True)
 
 
@@ -232,43 +222,33 @@ def grade_artifact(
     api_key: str | None = None,
     http_post: Callable[..., requests.Response] = requests.post,
 ) -> JudgeResult:
-    """Avalia um artefato textual via Gemini contra rubrica explícita.
+    """Avalia um artefato textual via OpenAI contra rubrica explícita.
 
     Em qualquer falha (sem API key, HTTP error, JSON inválido) retorna
     fallback: score=1.0, ok=False, missing descreve o erro.
     """
-    key = api_key if api_key is not None else os.environ.get("GEMINI_API_KEY", "")
+    key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY", "")
     if not key:
         log.error("judge_unavailable reason=missing_api_key role=%s", role)
         return JudgeResult(
             score=1.0,
             evidence_quote="",
-            missing="judge_unavailable: GEMINI_API_KEY ausente",
+            missing="judge_unavailable: OPENAI_API_KEY ausente",
             ok=False,
         )
 
     prompt = _build_judge_prompt(rubrica_text, role, content, headings, word_count, n_links)
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "responseMimeType": "application/json",
-            "responseSchema": {
-                "type": "object",
-                "properties": {
-                    "score": {"type": "number"},
-                    "evidence_quote": {"type": "string"},
-                    "missing": {"type": "string"},
-                },
-                "required": ["score", "evidence_quote", "missing"],
-            },
-            "temperature": JUDGE_TEMPERATURE,
-        },
-    }
+    payload = build_payload(prompt, "grade_artifact", {
+        "score": {"type": "number"},
+        "evidence_quote": {"type": "string"},
+        "missing": {"type": "string"},
+    })
     try:
         resp = http_post(
-            f"{GEMINI_API_URL}?key={key}",
+            OPENAI_API_URL,
+            headers={"Authorization": f"Bearer {key}"},
             json=payload,
-            timeout=GEMINI_TIMEOUT_SECONDS,
+            timeout=OPENAI_TIMEOUT_SECONDS,
         )
     except requests.RequestException as exc:
         log.error("judge_unavailable reason=network role=%s err=%s", role, exc)
@@ -279,15 +259,17 @@ def grade_artifact(
             "judge_unavailable reason=http role=%s status=%d body=%s",
             role,
             resp.status_code,
-            resp.text[:200],
+            "[omitido]",
         )
         return JudgeResult(1.0, "", f"judge_unavailable: HTTP {resp.status_code}", ok=False)
 
     try:
         body = resp.json()
-        text = body["candidates"][0]["content"]["parts"][0]["text"]
+        text = response_text(body)
         parsed = json.loads(text)
         score_raw = float(parsed["score"])
+        if not math.isfinite(score_raw):
+            raise ValueError("score não finito")
         evidence_quote = str(parsed.get("evidence_quote", "")).strip()[:300]
         missing = str(parsed.get("missing", "")).strip()[:400]
     except (KeyError, IndexError, ValueError, TypeError) as exc:
@@ -295,7 +277,7 @@ def grade_artifact(
             "judge_unavailable reason=parse role=%s err=%s body=%s",
             role,
             exc,
-            resp.text[:200],
+            "[omitido]",
         )
         return JudgeResult(1.0, "", f"judge_unavailable: parse ({exc})", ok=False)
 
