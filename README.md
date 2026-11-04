@@ -65,7 +65,7 @@ CI deploy automático em push pra `main` está em `.github/workflows/cloud-run-d
 | `GOOGLE_OAUTH_CLIENT_SECRET` | OAuth Client | sim — secret |
 | `OPENAI_API_KEY` | Secret Manager `OPENAI_API_KEY:latest` (avaliação de respostas e artefatos) | sim — secret |
 | `GEMINI_API_KEY` | Secret Manager `gemini-api-key:latest` (geração SQL) | sim — secret |
-| `GITHUB_PAT` | GitHub PAT classic | sim — secret |
+| `GITHUB_PAT` | Secret Manager `autograde_github_pat:latest` (leitura de repositorios publicos) | sim — secret |
 | `ROSTER_URL` | Roster Sheet pública | não |
 | `SHEET_ID` | Submissions Sheet | não |
 | `EXERCISES_BASE_URL` | URL base dos `*.yaml` (fallback de qualquer curso) | não |

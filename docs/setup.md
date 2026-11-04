@@ -39,15 +39,15 @@ Para reproduzir do zero:
 
 ---
 
-## 3. ⏳ Criar GitHub PAT classic
+## 3. ⏳ Criar GitHub PAT fine-grained
 
 Token de leitura para o backend bater na API do GitHub (sobe rate limit de 60 → 5000 req/h por hora; decisão em `autograder-design.md §3`).
 
-1. Acessar [github.com/settings/tokens](https://github.com/settings/tokens) → *Generate new token (classic)*.
-2. Nome: `autograde-backend-readonly`.
-3. Expiration: 1 ano (renovar a cada semestre).
-4. **Scopes**: somente `public_repo` (suficiente porque repos dos alunos são públicos — §2 do design).
-5. Copiar o token (formato `ghp_…`) e **salvar como secret no Cloud Run** (`GITHUB_PAT`). **Não** commitar.
+1. Acessar [Fine-grained tokens](https://github.com/settings/personal-access-tokens) → *Generate new token*.
+2. Nome: `pat_autograder`.
+3. Definir validade e renovar antes do vencimento.
+4. **Repository access**: `Public repositories` (somente leitura). Não adicionar permissões de conta ou escrita.
+5. Copiar o token e salvar uma versão no Secret Manager em `autograde_github_pat`. O Cloud Run o injeta na variável `GITHUB_PAT`. **Não** commitar.
 
 ---
 
@@ -176,11 +176,11 @@ Notas sobre o cloudbuild:
   `/oauth/refresh`) passam direto — eles existem para ser hit pela CLI antes
   de o aluno ter qualquer token.
 - A SA runtime (default compute SA) precisa de
-  `roles/secretmanager.secretAccessor` nos secrets `github-pat` e
+  `roles/secretmanager.secretAccessor` nos secrets `autograde_github_pat` e
   `google-oauth-client-secret`. Grant per-secret:
 
   ```bash
-  for s in github-pat google-oauth-client-secret; do
+  for s in autograde_github_pat google-oauth-client-secret; do
     gcloud secrets add-iam-policy-binding "$s" --project=autograde-314802 \
       --member="serviceAccount:1065810445001-compute@developer.gserviceaccount.com" \
       --role="roles/secretmanager.secretAccessor"
@@ -272,13 +272,13 @@ Use esta lista no dia em que for ligar a turma. Marque (`[x]`) cada item à medi
 
 - [x] **GCP project** `autograde-314802` criado (passo 1).
 - [x] **OAuth Client (Device Flow)** tipo *TVs and Limited Input devices* configurado em estado **Production** (passo 2).
-- [ ] **GitHub PAT classic** com escopo `public_repo` criado e salvo como secret `github-pat` no Secret Manager (passo 3).
+- [ ] **GitHub PAT fine-grained** com acesso somente de leitura a repositorios publicos criado e salvo como secret `autograde_github_pat` no Secret Manager (passo 3).
 - [ ] **OAuth `client_secret`** (do passo 2) salvo como secret `google-oauth-client-secret` no Secret Manager. Consumido pelos endpoints `/oauth/exchange` e `/oauth/refresh` que proxyam o `/token` do Google.
 - [ ] **Roster Sheet pública** criada e `ROSTER_URL` (formato `…/export?format=csv&gid=0`) anotado como env var do Cloud Run (passo 4).
 - [ ] **Submissions Sheet privada** criada e `SHEET_ID` anotado (passo 5).
 - [ ] **Default compute SA** `1065810445001-compute@developer.gserviceaccount.com` adicionada como **Editor** na Submissions Sheet (passo 6).
-- [ ] **`roles/secretmanager.secretAccessor`** grantado à default compute SA nos dois secrets `github-pat` e `google-oauth-client-secret` (passo 7).
-- [ ] **`gcloud builds submit --config=cloudbuild.yaml`** executado com substitutions completas. O `cloudbuild.yaml` já liga `GITHUB_PAT=github-pat:latest` e `GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest` via `--update-secrets`.
+- [ ] **`roles/secretmanager.secretAccessor`** grantado à default compute SA nos dois secrets `autograde_github_pat` e `google-oauth-client-secret` (passo 7).
+- [ ] **`gcloud builds submit --config=cloudbuild.yaml`** executado com substitutions completas. O `cloudbuild.yaml` já liga `GITHUB_PAT=autograde_github_pat:latest` e `GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest` via `--update-secrets`.
   *Prova:* `curl https://autograde-backend-<hash>.a.run.app/healthz` responde `{"status":"ok"}`.
 
 > **Smoke test pós-deploy:** depois do último item, peça a um aluno do roster para rodar `autograde login` + `autograde validar 1.1 --auto-submit` num repo de teste. Se a Submissions Sheet receber a row e `autograde notas` listar a tentativa, o pipeline está saudável ponta-a-ponta. O test E2E local (`tests/e2e/test_smoke.py`) valida o mesmo fluxo sem custo de cloud.
