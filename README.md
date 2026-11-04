@@ -66,6 +66,8 @@ O deploy em `.github/workflows/cloud-run-deploy.yml` é manual (`workflow_dispat
 | `OPENAI_API_KEY` | Secret Manager `OPENAI_API_KEY:latest` (avaliação de respostas e artefatos) | sim — secret |
 | `GEMINI_API_KEY` | Secret Manager `gemini-api-key:latest` (geração SQL) | sim — secret |
 | `GITHUB_PAT` | Secret Manager `autograde_github_pat:latest` (leitura de repositorios publicos) | sim — secret |
+| `LLM_MAX_CONCURRENT_OPENAI` | Máximo de chamadas OpenAI simultâneas no backend (padrão `4`) | não |
+| `LLM_MAX_CONCURRENT_GEMINI` | Máximo de chamadas Gemini simultâneas no backend (padrão `4`) | não |
 | `ROSTER_URL` | Roster Sheet pública | não |
 | `SHEET_ID` | Submissions Sheet | não |
 | `EXERCISES_BASE_URL` | URL base dos `*.yaml` (fallback de qualquer curso) | não |
@@ -110,6 +112,23 @@ compatibilidade. Em falha do avaliador, a API retorna HTTP 503 com código
 não grava nota e não consome tentativa diária. Isso vale para respostas,
 artefatos e geração SQL, incluindo resposta incompleta ou recusa do modelo.
 Não há fallback automático para outro modelo. Notas históricas não são alteradas.
+
+Todas as chamadas de avaliação e geração SQL passam por um limite compartilhado
+por provedor: quatro chamadas HTTP simultâneas, inclusive entre alunos diferentes.
+O limite é por processo; o deploy atual usa um worker e uma instância. Uma mudança
+nessa escala exige rever o limite. Esperar por uma vaga tem o mesmo teto de 30s
+do timeout por chamada; esgotar essa espera devolve o erro ao aluno.
+
+Falhas HTTP `408`, `429`, `500`, `502`, `503`, `504`, timeouts e falhas de conexão
+permitem até duas novas tentativas (três chamadas no total), com espera de 1s e 2s
+mais até 0,5s aleatório. `Retry-After` é respeitado; quando pede mais de 30s, o
+erro é devolvido sem uma nova chamada antecipada. A vaga é liberada durante a
+espera. Credenciais inválidas, quota diária/saldo esgotado identificado no erro,
+recusa do modelo e JSON inválido não são repetidos.
+
+O timeout de 30s por tentativa continua valendo; retries podem aumentar a espera
+e o custo, inclusive quando uma chamada que sofreu timeout foi processada pelo
+provedor. Ao esgotar as tentativas, permanece o feedback de erro sem gravar nota.
 
 Antes de ativar: validar a chave e acesso ao modelo, testar ambos os avaliadores
 com respostas sintéticas e confirmar `ok=True`; só então publicar no Cloud Run.

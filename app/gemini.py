@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 import requests
 
+from .llm_http import post_with_retries
 from .openai_grader import OPENAI_API_URL, OPENAI_TIMEOUT_SECONDS, build_payload, response_text
 
 log = logging.getLogger(__name__)
@@ -87,8 +88,10 @@ def grade_resposta(
         },
     )
     try:
-        resp = http_post(
+        resp = post_with_retries(
+            "openai",
             OPENAI_API_URL,
+            http_post=http_post,
             headers={"Authorization": f"Bearer {key}"},
             json=payload,
             timeout=OPENAI_TIMEOUT_SECONDS,
@@ -249,8 +252,10 @@ def grade_artifact(
         },
     )
     try:
-        resp = http_post(
+        resp = post_with_retries(
+            "openai",
             OPENAI_API_URL,
+            http_post=http_post,
             headers={"Authorization": f"Bearer {key}"},
             json=payload,
             timeout=OPENAI_TIMEOUT_SECONDS,
@@ -374,8 +379,10 @@ def generate_sql(
         },
     }
     try:
-        resp = http_post(
+        resp = post_with_retries(
+            "gemini",
             f"{GEMINI_API_URL}?key={key}",
+            http_post=http_post,
             json=payload,
             timeout=GEMINI_TIMEOUT_SECONDS,
         )

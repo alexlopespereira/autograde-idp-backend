@@ -64,4 +64,7 @@ jobs:
           # este e um quarto lugar para atualizar.
           EXERCISES_BASE_URL: https://raw.githubusercontent.com/alexlopespereira/idp_governodigital/main/exercicios
           EXERCISES_BASE_URL_IA: https://raw.githubusercontent.com/alexlopespereira/idp_agentes_ia/main/exercicios
+          # Espelha os defaults do deploy; este audit não faz chamadas LLM.
+          LLM_MAX_CONCURRENT_OPENAI: "4"
+          LLM_MAX_CONCURRENT_GEMINI: "4"
         run: python scripts/audit_planilhas.py
