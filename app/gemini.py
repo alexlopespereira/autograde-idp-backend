@@ -176,9 +176,6 @@ class JudgeResult:
     ok: bool
 
 
-JUDGE_TEMPERATURE = 0.0  # determinismo é mais importante que variedade aqui
-
-
 def _build_judge_prompt(
     rubrica_text: str,
     role: str,

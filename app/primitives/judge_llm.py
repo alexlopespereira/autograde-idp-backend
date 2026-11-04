@@ -1,11 +1,11 @@
 """judge.artifacts.* primitives — LLM-as-judge sobre artefatos textuais.
 
 Cada primitive recebe rubrica explícita em ``args``, lookup do artefato pelo
-``role`` no ``evidence['artifacts']``, chama ``app.gemini.grade_artifact`` com
-``temperature=0`` e converte ``score * peso → points_earned``.
+``role`` no ``evidence['artifacts']``, chama ``app.gemini.grade_artifact``
+(OpenAI, raciocínio low) e converte ``score * peso → points_earned``.
 
 Convenções:
-* ``ok=False`` do Gemini → score=1.0 (fallback "benefício da dúvida", mesma
+* ``ok=False`` do avaliador → score=1.0 (fallback "benefício da dúvida", mesma
   política do ``grade_resposta``). Mensagem indica fallback pro log do prof.
 * Threshold de pass: ``score >= 0.5`` é "passed" (≥metade dos pontos). Crítica
   pra UI de boletim que mostra ✅/❌ — abaixo de 0.5 marca como falha mesmo
@@ -75,7 +75,7 @@ def _materialize(
     passed = result.score >= PASS_THRESHOLD
     if not result.ok:
         message = (
-            f"[fallback judge] {role}: {result.missing or 'erro Gemini'}. "
+            f"[fallback judge] {role}: {result.missing or 'erro no avaliador OpenAI'}. "
             f"Nota máxima PROVISÓRIA por convenção (não pune aluno por bug "
             f"nosso) — sujeita a re-correção quando o judge voltar."
         )

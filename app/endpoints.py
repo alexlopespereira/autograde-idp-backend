@@ -583,7 +583,7 @@ async def grade_preview(body: GradeRequestBody, request: Request) -> Any:
         return validated
     exercise, _yaml_text, bulletin, late, days = validated
 
-    # Se respostas vieram E exercício tem perguntas, valida + grada com Gemini.
+    # Se respostas vieram E exercício tem perguntas, valida + avalia com o LLM.
     # Sem respostas: retorna bulletin "cru" + lista de perguntas pra CLI prompt.
     if exercise.perguntas and body.respostas is not None:
         respostas_check = _validate_respostas(exercise, body.respostas)
@@ -610,9 +610,9 @@ async def grade_preview(body: GradeRequestBody, request: Request) -> Any:
 
         gemini_results = await asyncio.to_thread(_grade_with_gemini, exercise, respostas_clean)
         bulletin = _append_gemini_to_bulletin(bulletin, exercise, gemini_results)
-        # Conta esta tentativa pro rate-limit. Side-effect: se Gemini falhar,
+        # Conta esta tentativa pro rate-limit. Side-effect: se o LLM falhar,
         # aluno ainda perde 1 tentativa (decisão consciente — senão dá pra
-        # spam Gemini com payloads garbage pra invalidar a contagem).
+        # spam do LLM com payloads garbage pra invalidar a contagem).
         await writer.append_preview_attempt(submitted_at.isoformat(), user.email, body.exercicio)
 
     return {
@@ -761,7 +761,7 @@ def _append_gemini_to_bulletin(
 def _grade_with_gemini(exercise: Exercise, respostas: list[str]) -> list[GeminiResult]:
     """Grada cada pergunta conforme seu tipo, preservando a ordem do YAML.
 
-    - ``reflexao`` → judge Gemini subjetivo (``grade_respostas``).
+    - ``reflexao`` → judge OpenAI subjetivo (``grade_respostas``).
     - ``sql``      → prompt do aluno vira SELECT (``generate_sql``) e é executado
       contra o dataset; nota cheia se o resultado bate o gabarito, senão 0.
 

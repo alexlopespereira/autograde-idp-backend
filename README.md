@@ -27,7 +27,7 @@ pytest -q --ignore=tests/e2e
 ruff check .
 ```
 
-CI (matrix Linux/macOS/Windows) roda os 174 testes unit em PRs. O job e2e (`pytest tests/e2e`) instala adicionalmente o CLI [autograde-idp](https://github.com/alexlopespereira/autograde-idp) e roda smoke ponta-a-ponta — só em Ubuntu.
+CI (matrix Linux/macOS/Windows) roda os testes unit em PRs. O job e2e (`pytest tests/e2e`) instala adicionalmente o CLI [autograde-idp](https://github.com/alexlopespereira/autograde-idp) e roda smoke ponta-a-ponta — só em Ubuntu.
 
 ### Build local Docker
 
@@ -53,7 +53,7 @@ gcloud builds submit --config=cloudbuild.yaml \
   --substitutions=_GOOGLE_OAUTH_CLIENT_ID=...,_ROSTER_URL=...,_SHEET_ID=...
 ```
 
-CI deploy automático em push pra `main` está em `.github/workflows/cloud-run-deploy.yml`. Hoje é `workflow_dispatch` apenas — habilitar `on: push` quando Workload Identity Federation estiver configurado (instruções no setup.md).
+O deploy em `.github/workflows/cloud-run-deploy.yml` é manual (`workflow_dispatch`). O CI roda em push para `main`, mas não publica em produção. Mantenha o deploy manual enquanto houver turma ativa.
 
 ---
 
