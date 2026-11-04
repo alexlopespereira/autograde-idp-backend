@@ -651,8 +651,7 @@ async def test_submissions_sql_correct_prompt_gets_full_marks(patches, monkeypat
     # de forma diferente da referência (mesmo resultado = 200)
     _stub_generate_sql(
         monkeypatch,
-        "SELECT AVG(valor) FROM contratos GROUP BY fornecedor "
-        "ORDER BY SUM(valor) DESC LIMIT 1",
+        "SELECT AVG(valor) FROM contratos GROUP BY fornecedor ORDER BY SUM(valor) DESC LIMIT 1",
     )
     response = await _post(
         _make_app(),
@@ -719,7 +718,9 @@ async def test_submissions_sql_anti_gaming_constant(patches, monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_submissions_sql_infra_failure_degraded_full_marks(patches, monkeypatch) -> None:
+async def test_submissions_sql_infra_failure_returns_error_without_saving(
+    patches, monkeypatch
+) -> None:
     sheets = _sheets_ok()
     _patch_endpoints(patches, exercise=_exercise_with_sql(peso=20), sheets=sheets)
     _stub_generate_sql(monkeypatch, "", ok=False, error="HTTP 500")
@@ -733,14 +734,10 @@ async def test_submissions_sql_infra_failure_degraded_full_marks(patches, monkey
             "respostas": ["qualquer prompt"],
         },
     )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["bulletin"]["total"] == 80  # nota cheia por convenção
-    assert body["bulletin"]["judge_degraded"] is True
-    import json as _json
-
-    payload = _json.loads(sheets.appended_rows[0].respostas_json)
-    assert payload[0]["gemini_ok"] is False
+    assert response.status_code == 503
+    assert response.json()["error"] == "evaluation_unavailable"
+    assert "HTTP 500" in response.json()["message"]
+    assert sheets.appended_rows == []
 
 
 @pytest.mark.asyncio
@@ -928,7 +925,9 @@ async def test_submissions_happy_path_with_gemini(patches, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_submissions_gemini_failure_falls_back_to_max(patches, monkeypatch) -> None:
+async def test_submissions_gemini_failure_returns_error_without_saving(
+    patches, monkeypatch
+) -> None:
     sheets = FakeSheets(
         append_result=AppendResult(
             written=True, row_count_before=0, row_count_after=1, sheet_row_index=2
@@ -952,13 +951,65 @@ async def test_submissions_gemini_failure_falls_back_to_max(patches, monkeypatch
             "respostas": ["qualquer coisa"],
         },
     )
-    assert response.status_code == 200
-    appended = sheets.appended_rows[0]
-    import json as _json
+    assert response.status_code == 503
+    assert response.json()["error"] == "evaluation_unavailable"
+    assert "gemini_unavailable" in response.json()["message"]
+    assert sheets.appended_rows == []
 
-    payload = _json.loads(appended.respostas_json)
-    assert payload[0]["nota"] == 10  # peso máximo no fallback
-    assert payload[0]["gemini_ok"] is False
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/grade-preview", "/submissions"])
+async def test_artifact_error_blocks_evaluation_without_writes(patches, monkeypatch, path):
+    sheets = _sheets_ok()
+    _patch_endpoints(patches, sheets=sheets)
+    monkeypatch.setitem(
+        registry,
+        PRIMITIVE_PASS,
+        lambda args, evidence: CriterioResult(
+            True, 60, 60, "Erro ao avaliar artefato: HTTP 503", degraded=True
+        ),
+    )
+    response = await _post(
+        _make_app(),
+        path,
+        {
+            "exercicio": "1.1",
+            "submission_uuid": "artifact-error",
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+        },
+    )
+    assert response.status_code == 503
+    assert response.json()["error"] == "evaluation_unavailable"
+    assert "HTTP 503" in response.json()["message"]
+    assert sheets.appended_rows == []
+    assert sheets.appended_previews == []
+
+
+@pytest.mark.asyncio
+async def test_preview_llm_failure_does_not_consume_attempt(patches, monkeypatch):
+    sheets = _sheets_ok()
+    _patch_endpoints(patches, exercise=_exercise_with_perguntas(num=1), sheets=sheets)
+    monkeypatch.setattr(
+        endpoints_module,
+        "grade_respostas",
+        lambda items: [
+            GeminiResult(nota=10, feedback="openai_unavailable: HTTP 429", ok=False) for _ in items
+        ],
+    )
+    response = await _post(
+        _make_app(),
+        "/grade-preview",
+        {
+            "exercicio": "1.1",
+            "respostas": ["texto"],
+            "repo_url": f"https://github.com/{GITHUB_USERNAME}/projeto",
+        },
+    )
+    assert response.status_code == 503
+    assert "HTTP 429" in response.json()["message"]
+    assert "Nenhuma nota" in response.json()["message"]
+    assert sheets.appended_previews == []
+    assert sheets.appended_rows == []
 
 
 @pytest.mark.asyncio
@@ -1377,9 +1428,7 @@ async def test_me_profile_only_one_field_updated(patches) -> None:
     ],
 )
 @pytest.mark.asyncio
-async def test_me_profile_invalid_github_username_returns_400(
-    patches, bad_username
-) -> None:
+async def test_me_profile_invalid_github_username_returns_400(patches, bad_username) -> None:
     from app.roster_writer import ProfileUpdateResult
 
     fake = FakeRosterWriter(result=ProfileUpdateResult(updated=[], skipped=[]))
@@ -1550,9 +1599,7 @@ async def test_grade_preview_com_repo_exige_repo_url(patches) -> None:
 @pytest.mark.asyncio
 async def test_grade_preview_com_repo_url_vazia_exige_repo(patches) -> None:
     _patch_endpoints(patches, exercise=_make_exercise(requer_repositorio=True))
-    response = await _post(
-        _make_app(), "/grade-preview", {"exercicio": "1.1", "repo_url": "   "}
-    )
+    response = await _post(_make_app(), "/grade-preview", {"exercicio": "1.1", "repo_url": "   "})
     assert response.status_code == 400
     assert response.json()["error"] == "repo_url_required"
 
@@ -1564,9 +1611,7 @@ async def test_grade_preview_com_repo_url_vazia_exige_repo(patches) -> None:
 
 
 @pytest.mark.asyncio
-async def test_recusa_de_regra_de_negocio_vai_para_o_log_com_identidade(
-    patches, caplog
-) -> None:
+async def test_recusa_de_regra_de_negocio_vai_para_o_log_com_identidade(patches, caplog) -> None:
     import logging
 
     _patch_endpoints(patches, exercise=_make_exercise(requer_repositorio=True))
@@ -1581,7 +1626,7 @@ async def test_recusa_de_regra_de_negocio_vai_para_o_log_com_identidade(
     rec = next(r for r in caplog.records if r.msg == "request_rejected")
     assert rec.error == "repo_owner_mismatch"
     assert rec.status_code == 403
-    assert rec.email == EMAIL           # de QUEM e a falha
+    assert rec.email == EMAIL  # de QUEM e a falha
     assert rec.path == "/grade-preview"
     assert rec.correlation_id == response.headers["X-Correlation-Id"]
 
@@ -1632,9 +1677,7 @@ async def test_recusa_loga_o_exercicio(patches, caplog) -> None:
 
 
 @pytest.mark.asyncio
-async def test_recusa_emitida_fora_da_thread_tambem_loga_o_exercicio(
-    patches, caplog
-) -> None:
+async def test_recusa_emitida_fora_da_thread_tambem_loga_o_exercicio(patches, caplog) -> None:
     """Guarda de regressao do detalhe que quebraria isto em silencio:
     `_validate_and_grade` roda em `asyncio.to_thread`, que COPIA o contexto.
     Setar o contextvar lá dentro faria as recusas do proprio handler (as de
@@ -1680,9 +1723,7 @@ def roster_com_apelido() -> dict[str, RosterEntry]:
 
 
 @pytest.mark.asyncio
-async def test_me_grades_soma_submissoes_das_duas_contas(
-    patches, roster_com_apelido
-) -> None:
+async def test_me_grades_soma_submissoes_das_duas_contas(patches, roster_com_apelido) -> None:
     sheets = FakeSheets(
         submissions_rows=[
             [

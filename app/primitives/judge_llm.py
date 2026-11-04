@@ -5,8 +5,8 @@ Cada primitive recebe rubrica explícita em ``args``, lookup do artefato pelo
 (OpenAI, raciocínio low) e converte ``score * peso → points_earned``.
 
 Convenções:
-* ``ok=False`` do avaliador → score=1.0 (fallback "benefício da dúvida", mesma
-  política do ``grade_resposta``). Mensagem indica fallback pro log do prof.
+* ``ok=False`` do avaliador → nenhum ponto; a mensagem informa o erro.
+  ``degraded=True`` impede o endpoint de gravar uma avaliação incompleta.
 * Threshold de pass: ``score >= 0.5`` é "passed" (≥metade dos pontos). Crítica
   pra UI de boletim que mostra ✅/❌ — abaixo de 0.5 marca como falha mesmo
   com points_earned > 0, sinalizando "passou raspando, revise".
@@ -67,19 +67,19 @@ def _materialize(
     peso: int, role: str, result: JudgeResult
 ) -> CriterioResult:
     """Converte JudgeResult em CriterioResult conforme peso."""
+    if not result.ok:
+        return CriterioResult(
+            False, 0, peso,
+            f"Erro ao avaliar {role}: {result.missing or 'avaliador OpenAI indisponível'}. "
+            "Tente novamente.",
+            degraded=True,
+        )
     points_earned = int(round(result.score * peso))
     if points_earned < 0:
         points_earned = 0
     if points_earned > peso:
         points_earned = peso
     passed = result.score >= PASS_THRESHOLD
-    if not result.ok:
-        message = (
-            f"[fallback judge] {role}: {result.missing or 'erro no avaliador OpenAI'}. "
-            f"Nota máxima PROVISÓRIA por convenção (não pune aluno por bug "
-            f"nosso) — sujeita a re-correção quando o judge voltar."
-        )
-        return CriterioResult(True, peso, peso, message, degraded=True)
     quote_preview = result.evidence_quote.replace("\n", " ")[:160]
     if passed:
         msg = f"score={result.score:.2f}. evidência: {quote_preview!r}"

@@ -4,7 +4,7 @@ Estratégia: monkeypatch ``app.primitives.judge_llm.grade_artifact`` para
 retornar ``JudgeResult`` controlado. Não bate em Gemini real. Cobre:
   * happy path (passed conforme threshold)
   * score abaixo de PASS_THRESHOLD → reprovado mas points_earned proporcional
-  * fallback (ok=False → nota máxima por convenção)
+  * erro do avaliador (ok=False → zero pontos e degraded=True)
   * artefato ausente → falha imediata sem chamar judge
   * actor_map_quality concatena map + transcript corretamente
 """
@@ -133,12 +133,11 @@ def test_meta_prompt_quality_fallback_when_ok_false(monkeypatch: pytest.MonkeyPa
         {"_peso": 20, "role": "meta_prompt"},
         _ev(_entry("meta_prompt", content="x")),
     )
-    # Fallback: nota máxima, passed=True, mensagem indica fallback
-    assert r.passed is True
-    assert r.points_earned == 20
-    assert "fallback" in r.message.lower()
-    # Auditoria: fallback marca degraded=True (nota provisória, re-correção)
+    assert r.passed is False
+    assert r.points_earned == 0
+    assert "HTTP 500" in r.message
     assert r.degraded is True
+
 
 
 def test_meta_prompt_quality_not_degraded_when_ok_true(monkeypatch: pytest.MonkeyPatch):

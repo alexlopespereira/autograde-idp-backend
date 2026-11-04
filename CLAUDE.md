@@ -49,7 +49,7 @@ Se exercício tem `perguntas` (open-ended), `_grade_with_gemini` chama `app.gemi
 
 ### Primitives (app/primitives/)
 
-Sistema de plugin via registry: `register("name")` decora `(args, evidence) → CriterioResult`. Import de `app.primitives.__init__` dispara registro dos 4 módulos: `evidence_artifacts`, `evidence_shell`, `github`, `judge_llm`. YAML do exercício referencia primitives por `check:` string. `grader.grade` injeta `_peso` em `args` automaticamente. `CriterioResult.degraded=True` sinaliza fallback (ex: Gemini fora → nota cheia provisória) e propaga pra `bulletin.judge_degraded`.
+Sistema de plugin via registry: `register("name")` decora `(args, evidence) → CriterioResult`. Import de `app.primitives.__init__` dispara registro dos 4 módulos: `evidence_artifacts`, `evidence_shell`, `github`, `judge_llm`. YAML do exercício referencia primitives por `check:` string. `grader.grade` injeta `_peso` em `args` automaticamente. `CriterioResult.degraded=True` sinaliza falha de avaliacao. O endpoint retorna HTTP 503 com `evaluation_unavailable` e feedback ao aluno, sem pontos, nota gravada ou tentativa consumida. A coluna `judge_degraded` permanece para historico.
 
 ### Auth (app/auth.py)
 

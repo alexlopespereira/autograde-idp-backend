@@ -58,6 +58,10 @@ def test_artifact_request_and_score(monkeypatch):
 
 
 @pytest.mark.parametrize("body", [
+    [],
+    {"status": "completed", "output": None},
+    {"status": "completed", "output": [None]},
+    {"status": "completed", "output": [{"type": "message", "content": None}]},
     {"status": "incomplete", "output": []},
     {"status": "completed", "output": [{"type": "message", "content": [
         {"type": "refusal", "refusal": "cannot grade"},
@@ -66,14 +70,14 @@ def test_artifact_request_and_score(monkeypatch):
     completed({"score": float("nan"), "evidence_quote": "", "missing": ""}),
     completed({"score": "bad", "evidence_quote": "", "missing": ""}),
 ])
-def test_bad_provider_output_is_provisional(body):
+def test_bad_provider_output_does_not_award_points(body):
     post = lambda *a, **kw: Response(body)  # noqa: E731
     artifact = grade_artifact("r", "texto", "c", [], 1, 0, api_key="k", http_post=post)
     assert not artifact.ok
-    assert artifact.score == 1.0
+    assert artifact.score == 0.0
     short = grade_resposta("q", "c", "r", 10, api_key="k", http_post=post)
     assert not short.ok
-    assert short.nota == 10
+    assert short.nota == 0
 
 
 def test_missing_openai_key_does_not_use_gemini(monkeypatch):
@@ -84,13 +88,13 @@ def test_missing_openai_key_does_not_use_gemini(monkeypatch):
     assert "OPENAI_API_KEY" in result.missing
 
 
-def test_artifact_network_error_is_provisional():
+def test_artifact_network_error_does_not_award_points():
     def post(*a, **kw):
         raise requests.Timeout("timeout")
 
     result = grade_artifact("r", "texto", "c", [], 1, 0, api_key="k", http_post=post)
     assert not result.ok
-    assert result.score == 1.0
+    assert result.score == 0.0
 
 
 def test_http_error_does_not_expose_provider_body(caplog):
@@ -103,3 +107,16 @@ def test_http_error_does_not_expose_provider_body(caplog):
     ]:
         assert not result.ok
     assert response.text not in caplog.text
+
+
+def test_network_error_does_not_expose_api_key(caplog):
+    secret = "test-private-api-key"
+
+    def post(*a, **kw):
+        raise requests.ConnectionError(f"request failed: https://api.example/?key={secret}")
+
+    result = grade_resposta("q", "c", "r", 10, api_key=secret, http_post=post)
+    assert not result.ok
+    assert result.nota == 0
+    assert secret not in result.feedback
+    assert secret not in caplog.text

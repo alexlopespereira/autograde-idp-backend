@@ -567,6 +567,8 @@ def _validate_and_grade(
         else {},
     }
     bulletin = grade(exercise, evidence)
+    if error := _evaluation_error(bulletin):
+        return error
     late, days = _compute_late(cronograma.fecha, submitted_at)
     return exercise, yaml_text, bulletin, late, days
 
@@ -610,9 +612,9 @@ async def grade_preview(body: GradeRequestBody, request: Request) -> Any:
 
         gemini_results = await asyncio.to_thread(_grade_with_gemini, exercise, respostas_clean)
         bulletin = _append_gemini_to_bulletin(bulletin, exercise, gemini_results)
-        # Conta esta tentativa pro rate-limit. Side-effect: se o LLM falhar,
-        # aluno ainda perde 1 tentativa (decisão consciente — senão dá pra
-        # spam do LLM com payloads garbage pra invalidar a contagem).
+        if error := _evaluation_error(bulletin):
+            return error
+        # Só avaliações concluídas consomem tentativa.
         await writer.append_preview_attempt(submitted_at.isoformat(), user.email, body.exercicio)
 
     return {
@@ -728,6 +730,21 @@ def _check_rate_limit(
     return None
 
 
+def _evaluation_error(bulletin: Bulletin) -> JSONResponse | None:
+    """Falha técnica informa o aluno sem atribuir/gravar nota ou tentativa."""
+    failed = [c for c in bulletin.criterios if c.degraded]
+    if not failed:
+        return None
+    feedback = "\n".join(c.message for c in failed)
+    return _json_error(
+        503, "evaluation_unavailable",
+        "Não foi possível concluir sua avaliação.\n"
+        f"{feedback}\n"
+        "Nenhuma nota foi registrada e esta falha não consumiu uma tentativa. "
+        "Tente novamente mais tarde. Se persistir, envie esta mensagem ao professor.",
+    )
+
+
 def _append_gemini_to_bulletin(
     bulletin: Bulletin,
     exercise: Exercise,
@@ -737,19 +754,20 @@ def _append_gemini_to_bulletin(
     extra_total = 0
     extra_max = 0
     for _idx, (pergunta, gr) in enumerate(zip(exercise.perguntas, gemini_results)):
+        nota = gr.nota if gr.ok else 0
         extra.append(
             CriterioResult(
-                passed=gr.nota >= pergunta.peso // 2,  # passou se ≥ 50% do peso
-                points_earned=gr.nota,
+                passed=gr.ok and nota >= pergunta.peso // 2,
+                points_earned=nota,
                 points_max=pergunta.peso,
                 # Feedback do grader (justificativa concreta da nota).
                 # CLI renderiza em linha separada indentada se > 50 chars.
                 message=gr.feedback,
-                # ok=False ⇒ nota de fallback (grader indisponível) → PROVISÓRIA.
+                # ok=False impede a gravação e comunica o erro ao aluno.
                 degraded=not gr.ok,
             )
         )
-        extra_total += gr.nota
+        extra_total += nota
         extra_max += pergunta.peso
     return Bulletin(
         criterios=bulletin.criterios + tuple(extra),
@@ -789,15 +807,15 @@ def _grade_with_gemini(exercise: Exercise, respostas: list[str]) -> list[GeminiR
 def _grade_one_sql(dataset: DatasetSql | None, pergunta: Pergunta, resposta: str) -> GeminiResult:
     if dataset is None:  # parse já barra isso; guarda defensiva
         return GeminiResult(
-            nota=pergunta.peso, feedback="sql_grader_degraded: sem dataset", ok=False
+            nota=0, feedback="Erro na avaliação SQL: dataset indisponível", ok=False
         )
 
     gen = generate_sql(resposta, dataset.schema)
     if not gen.ok:
-        # Falha de infra (Gemini fora) → nota cheia + degraded (bug nosso não pune aluno).
+        # Falha de infraestrutura informa o erro; nenhuma nota é gravada.
         return GeminiResult(
-            nota=pergunta.peso,
-            feedback=f"sql_grader_degraded (nota provisória): {gen.error}",
+            nota=0,
+            feedback=f"Erro na avaliação SQL: {gen.error}",
             ok=False,
         )
 
@@ -844,6 +862,9 @@ async def submissions(body: SubmissionRequestBody, request: Request) -> Any:
         bulletin = _append_gemini_to_bulletin(bulletin, exercise, gemini_results)
     else:
         gemini_results = []
+
+    if error := _evaluation_error(bulletin):
+        return error
 
     spec_sha = hashlib.sha256(yaml_text.encode("utf-8")).hexdigest()
     criterios_payload = [asdict(c) for c in bulletin.criterios]

@@ -86,7 +86,7 @@ def test_grade_resposta_clamps_below_zero():
 def test_grade_resposta_fallback_no_api_key():
     result = grade_resposta("q", "c", "r", peso=10, api_key="", http_post=lambda *_a, **_k: None)  # type: ignore[arg-type]
     assert result.ok is False
-    assert result.nota == 10  # peso máximo (não punir)
+    assert result.nota == 0  # nenhum ponto em falha técnica
     assert "OPENAI_API_KEY" in result.feedback
 
 
@@ -96,7 +96,7 @@ def test_grade_resposta_fallback_http_error():
 
     result = grade_resposta("q", "c", "r", peso=15, api_key="k", http_post=fake_post)
     assert result.ok is False
-    assert result.nota == 15
+    assert result.nota == 0
     assert "HTTP 500" in result.feedback
 
 
@@ -106,7 +106,7 @@ def test_grade_resposta_fallback_network_error():
 
     result = grade_resposta("q", "c", "r", peso=7, api_key="k", http_post=fake_post)
     assert result.ok is False
-    assert result.nota == 7
+    assert result.nota == 0
     assert "rede" in result.feedback
 
 
@@ -116,7 +116,7 @@ def test_grade_resposta_fallback_malformed_json():
 
     result = grade_resposta("q", "c", "r", peso=10, api_key="k", http_post=fake_post)
     assert result.ok is False
-    assert result.nota == 10
+    assert result.nota == 0
     assert "parse" in result.feedback
 
 
@@ -126,7 +126,7 @@ def test_grade_resposta_fallback_missing_candidates():
 
     result = grade_resposta("q", "c", "r", peso=10, api_key="k", http_post=fake_post)
     assert result.ok is False
-    assert result.nota == 10
+    assert result.nota == 0
 
 
 def test_grade_resposta_uses_env_var_when_api_key_none(monkeypatch: pytest.MonkeyPatch):

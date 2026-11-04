@@ -91,9 +91,9 @@ class SubmissionRow:
     spec_sha: str
     ai_evidence_hashes: str = ""
     respostas_json: str = ""
-    # Flag de audit: True quando ≥1 critério teve nota de fallback degradado
-    # (LLM-judge indisponível). Coluna S na Sheet — filtra os que precisam de
-    # re-correção manual. Header manual em S1: "judge_degraded".
+    # Flag histórica de audit (coluna S). Novas avaliações incompletas são
+    # rejeitadas pelo endpoint antes do append; mantém compatibilidade com
+    # submissões antigas. Header manual em S1: "judge_degraded".
     judge_degraded: bool = False
     # Curso da submissão, derivado do prefixo do id do exercício (`ia-1.1` →
     # "ia"; `1.1` → "td"). Coluna T — existe pra filtro/pivot do professor; a

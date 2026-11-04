@@ -724,16 +724,17 @@ def test_rubric_artefato_ausente_nao_chama_o_judge(monkeypatch):
     assert "reflexao" in r.message
 
 
-def test_rubric_fallback_da_nota_maxima_provisoria(monkeypatch):
+def test_rubric_erro_sem_pontos(monkeypatch):
     _stub_judge(monkeypatch, JudgeResult(0.0, "", "gemini fora do ar", False))
     r = _run(
         "judge.artifacts.rubric",
         {"role": "reflexao", "rubrica": "Avalie."},
         _ev(_entry("reflexao", "x")),
     )
-    assert r.passed is True
-    assert r.points_earned == 10
-    assert "PROVISÓRIA" in r.message
+    assert r.passed is False
+    assert r.points_earned == 0
+    assert "gemini fora do ar" in r.message
+    assert r.degraded is True
 
 
 def test_rubric_sem_rubrica_nem_sub_criterios_e_erro_de_args():

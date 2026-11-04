@@ -105,9 +105,11 @@ limite de 4096 tokens de saída (incluindo raciocínio) e timeout de 30s.
 A geração de SQL continua usando `gemini-2.5-flash-lite`.
 
 O módulo `app/gemini.py` e o tipo `GeminiResult` mantêm seus nomes por
-compatibilidade. Falhas do avaliador continuam sinalizadas como degradadas,
-com nota máxima provisória; incompletude e recusa nunca viram nota definitiva.
-Não há fallback automático para outro modelo.
+compatibilidade. Em falha do avaliador, a API retorna HTTP 503 com código
+`evaluation_unavailable` e o feedback do erro para o aluno. Não concede pontos,
+não grava nota e não consome tentativa diária. Isso vale para respostas,
+artefatos e geração SQL, incluindo resposta incompleta ou recusa do modelo.
+Não há fallback automático para outro modelo. Notas históricas não são alteradas.
 
 Antes de ativar: validar a chave e acesso ao modelo, testar ambos os avaliadores
 com respostas sintéticas e confirmar `ok=True`; só então publicar no Cloud Run.

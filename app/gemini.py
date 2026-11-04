@@ -2,7 +2,8 @@
 
 Respostas curtas e artefatos usam GPT-6 Luna com JSON Schema estrito.
 Os nomes GeminiResult e deste módulo ficam por compatibilidade com callers.
-Falha de infraestrutura preserva nota provisória máxima e ok=False.
+Falha de infraestrutura retorna ok=False sem pontos; o endpoint informa o
+erro ao aluno e impede a gravação de uma avaliação incompleta.
 A geração SQL continua usando Gemini, separadamente dos avaliadores.
 """
 
@@ -30,7 +31,7 @@ GEMINI_TIMEOUT_SECONDS = 30
 
 @dataclass(frozen=True)
 class GeminiResult:
-    """Resultado de grading. `ok=False` indica fallback (nota máxima por convenção)."""
+    """Resultado de grading. `ok=False` indica erro, sem pontos concedidos."""
 
     nota: int
     feedback: str
@@ -68,21 +69,23 @@ def grade_resposta(
 ) -> GeminiResult:
     """Avalia uma resposta via OpenAI. Retorna nota inteira [0, peso] + feedback.
 
-    Em qualquer falha (sem API key, HTTP error, JSON inválido, nota fora de range)
-    retorna fallback: nota=peso (máxima), feedback descrevendo o erro, ok=False.
+    Em falha (sem API key, HTTP error, JSON inválido), retorna nota=0,
+    feedback descrevendo o erro e ok=False. O endpoint impede a gravação.
     """
     key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY", "")
     if not key:
         log.error("openai_unavailable reason=missing_api_key")
-        return GeminiResult(
-            nota=peso, feedback="openai_unavailable: OPENAI_API_KEY ausente", ok=False
-        )
+        return GeminiResult(nota=0, feedback="openai_unavailable: OPENAI_API_KEY ausente", ok=False)
 
     prompt = _build_prompt(texto_pergunta, criterios_avaliacao, resposta_aluno, peso)
-    payload = build_payload(prompt, "grade_resposta", {
-        "nota": {"type": "integer"},
-        "feedback": {"type": "string"},
-    })
+    payload = build_payload(
+        prompt,
+        "grade_resposta",
+        {
+            "nota": {"type": "integer"},
+            "feedback": {"type": "string"},
+        },
+    )
     try:
         resp = http_post(
             OPENAI_API_URL,
@@ -91,15 +94,17 @@ def grade_resposta(
             timeout=OPENAI_TIMEOUT_SECONDS,
         )
     except requests.RequestException as exc:
-        log.error("openai_unavailable reason=network err=%s", exc)
-        return GeminiResult(nota=peso, feedback=f"openai_unavailable: rede ({exc})", ok=False)
+        log.error("openai_unavailable reason=network err=%s", str(exc).replace(key, "***"))
+        return GeminiResult(
+            nota=0,
+            feedback=f"openai_unavailable: rede ({str(exc).replace(key, chr(42) * 3)})",
+            ok=False,
+        )
 
     if resp.status_code != 200:
-        log.error(
-            "openai_unavailable reason=http status=%d", resp.status_code
-        )
+        log.error("openai_unavailable reason=http status=%d", resp.status_code)
         return GeminiResult(
-            nota=peso, feedback=f"openai_unavailable: HTTP {resp.status_code}", ok=False
+            nota=0, feedback=f"openai_unavailable: HTTP {resp.status_code}", ok=False
         )
 
     try:
@@ -108,9 +113,9 @@ def grade_resposta(
         parsed = json.loads(text)
         nota_raw = int(parsed["nota"])
         feedback = str(parsed.get("feedback", "")).strip()[:600]
-    except (KeyError, IndexError, ValueError, TypeError) as exc:
+    except (KeyError, IndexError, ValueError, TypeError, OverflowError) as exc:
         log.error("openai_unavailable reason=parse err=%s body=%s", exc, "[omitido]")
-        return GeminiResult(nota=peso, feedback=f"openai_unavailable: parse ({exc})", ok=False)
+        return GeminiResult(nota=0, feedback=f"openai_unavailable: parse ({exc})", ok=False)
 
     if nota_raw < 0:
         nota = 0
@@ -166,8 +171,7 @@ class JudgeResult:
     """Resultado de LLM-judge sobre artefato.
 
     ``score`` em [0.0, 1.0]; caller faz ``int(round(score * peso))``.
-    ``ok=False`` indica fallback (score=1.0 por convenção — mesma política
-    do ``grade_resposta``: bug nosso não pune aluno).
+    ``ok=False`` indica falha de avaliação, sem pontos concedidos.
     """
 
     score: float
@@ -222,24 +226,28 @@ def grade_artifact(
     """Avalia um artefato textual via OpenAI contra rubrica explícita.
 
     Em qualquer falha (sem API key, HTTP error, JSON inválido) retorna
-    fallback: score=1.0, ok=False, missing descreve o erro.
+    fallback: score=0.0, ok=False, missing descreve o erro.
     """
     key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY", "")
     if not key:
         log.error("judge_unavailable reason=missing_api_key role=%s", role)
         return JudgeResult(
-            score=1.0,
+            score=0.0,
             evidence_quote="",
             missing="judge_unavailable: OPENAI_API_KEY ausente",
             ok=False,
         )
 
     prompt = _build_judge_prompt(rubrica_text, role, content, headings, word_count, n_links)
-    payload = build_payload(prompt, "grade_artifact", {
-        "score": {"type": "number"},
-        "evidence_quote": {"type": "string"},
-        "missing": {"type": "string"},
-    })
+    payload = build_payload(
+        prompt,
+        "grade_artifact",
+        {
+            "score": {"type": "number"},
+            "evidence_quote": {"type": "string"},
+            "missing": {"type": "string"},
+        },
+    )
     try:
         resp = http_post(
             OPENAI_API_URL,
@@ -248,8 +256,12 @@ def grade_artifact(
             timeout=OPENAI_TIMEOUT_SECONDS,
         )
     except requests.RequestException as exc:
-        log.error("judge_unavailable reason=network role=%s err=%s", role, exc)
-        return JudgeResult(1.0, "", f"judge_unavailable: rede ({exc})", ok=False)
+        log.error(
+            "judge_unavailable reason=network role=%s err=%s", role, str(exc).replace(key, "***")
+        )
+        return JudgeResult(
+            0.0, "", f"judge_unavailable: rede ({str(exc).replace(key, chr(42) * 3)})", ok=False
+        )
 
     if resp.status_code != 200:
         log.error(
@@ -258,7 +270,7 @@ def grade_artifact(
             resp.status_code,
             "[omitido]",
         )
-        return JudgeResult(1.0, "", f"judge_unavailable: HTTP {resp.status_code}", ok=False)
+        return JudgeResult(0.0, "", f"judge_unavailable: HTTP {resp.status_code}", ok=False)
 
     try:
         body = resp.json()
@@ -269,14 +281,14 @@ def grade_artifact(
             raise ValueError("score não finito")
         evidence_quote = str(parsed.get("evidence_quote", "")).strip()[:300]
         missing = str(parsed.get("missing", "")).strip()[:400]
-    except (KeyError, IndexError, ValueError, TypeError) as exc:
+    except (KeyError, IndexError, ValueError, TypeError, OverflowError) as exc:
         log.error(
             "judge_unavailable reason=parse role=%s err=%s body=%s",
             role,
             exc,
             "[omitido]",
         )
-        return JudgeResult(1.0, "", f"judge_unavailable: parse ({exc})", ok=False)
+        return JudgeResult(0.0, "", f"judge_unavailable: parse ({exc})", ok=False)
 
     if score_raw < 0.0:
         score = 0.0
@@ -298,8 +310,8 @@ def grade_artifact(
 # gabarito. Diferente dos judges: aqui o LLM não dá nota — só traduz prompt→SQL.
 #
 # Política de falha (consistente com o resto do módulo): falha de INFRA (sem
-# key, HTTP, parse) → ok=False; o caller trata como degradado (nota cheia, bug
-# nosso não pune aluno). SQL que roda e erra/não bate = nota 0 real (decidido
+# key, HTTP, parse) → ok=False; o caller informa o erro e impede a gravação.
+# SQL que roda e erra/não bate = nota 0 real (decidido
 # em sql_exec, não aqui).
 # ---------------------------------------------------------------------------
 
@@ -368,8 +380,8 @@ def generate_sql(
             timeout=GEMINI_TIMEOUT_SECONDS,
         )
     except requests.RequestException as exc:
-        log.error("sqlgen_unavailable reason=network err=%s", exc)
-        return SqlGenResult(sql="", ok=False, error=f"rede ({exc})")
+        log.error("sqlgen_unavailable reason=network err=%s", str(exc).replace(key, "***"))
+        return SqlGenResult(sql="", ok=False, error=f"rede ({str(exc).replace(key, chr(42) * 3)})")
 
     if resp.status_code != 200:
         log.error(
@@ -384,7 +396,7 @@ def generate_sql(
         text = body["candidates"][0]["content"]["parts"][0]["text"]
         parsed = json.loads(text)
         sql = str(parsed["sql"]).strip()
-    except (KeyError, IndexError, ValueError, TypeError) as exc:
+    except (KeyError, IndexError, ValueError, TypeError, OverflowError) as exc:
         log.error("sqlgen_unavailable reason=parse err=%s body=%s", exc, resp.text[:200])
         return SqlGenResult(sql="", ok=False, error=f"parse ({exc})")
 
